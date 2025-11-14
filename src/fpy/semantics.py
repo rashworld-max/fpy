@@ -2,7 +2,6 @@ from __future__ import annotations
 from decimal import Decimal
 import decimal
 from numbers import Number
-import heapq
 from typing import Union
 
 from fpy.error import CompileError

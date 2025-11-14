@@ -14,7 +14,7 @@ authors = [
   {name = "Zimri Leisher", email = "zimri.leisher@gmail.com"},
 ]
 classifiers = [
-    "Development Status :: 5 - Production/Stable",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "Operating System :: Unix",
     "Operating System :: POSIX",
