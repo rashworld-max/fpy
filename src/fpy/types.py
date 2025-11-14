@@ -9,7 +9,7 @@ import typing
 from typing import Callable, Iterable, Union, get_args, get_origin
 import zlib
 
-from fprime_gds.common.fpy.error import CompileError
+from fpy.error import CompileError
 
 # In Python 3.10+, the `|` operator creates a `types.UnionType`.
 # We need to handle this for forward compatibility, but it won't exist in 3.9.
@@ -42,7 +42,7 @@ from fprime.common.models.serialize.numerical_types import (
     NumericalType as NumericalValue,
 )
 from fprime.common.models.serialize.string_type import StringType as StringValue
-from fprime_gds.common.fpy.syntax import (
+from fpy.syntax import (
     AstBreak,
     AstContinue,
     AstExpr,

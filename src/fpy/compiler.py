@@ -16,12 +16,12 @@ from fprime.common.models.serialize.numerical_types import (
 from fprime.common.models.serialize.type_base import BaseType as FppValue
 from lark import Lark
 from fprime_gds.common.fpy.bytecode.directives import Directive
-from fprime_gds.common.fpy.codegen import (
+from fpy.codegen import (
     GenerateCode,
 )
-from fprime_gds.common.fpy.ir import FinalChecks, IrPass, ResolveLabels
-from fprime_gds.common.fpy.desugaring import DesugarForLoops
-from fprime_gds.common.fpy.semantics import (
+from fpy.ir import FinalChecks, IrPass, ResolveLabels
+from fpy.desugaring import DesugarForLoops
+from fpy.semantics import (
     AssignIds,
     AssignLocalScopes,
     CalculateConstExprValues,
@@ -34,9 +34,9 @@ from fprime_gds.common.fpy.semantics import (
     ResolveVarsTypesAndFuncs,
     WarnRangesAreNotEmpty,
 )
-from fprime_gds.common.fpy.syntax import AstScopedBody, FpyTransformer, PythonIndenter
-from fprime_gds.common.fpy.macros import MACROS
-from fprime_gds.common.fpy.types import (
+from fpy.syntax import AstScopedBody, FpyTransformer, PythonIndenter
+from fpy.macros import MACROS
+from fpy.types import (
     SPECIFIC_NUMERIC_TYPES,
     CompileState,
     FppType,
@@ -55,8 +55,8 @@ from fprime_gds.common.templates.cmd_template import CmdTemplate
 from pathlib import Path
 from lark import Lark, LarkError
 
-from fprime_gds.common.fpy.error import BackendError, CompileError, handle_lark_error
-import fprime_gds.common.fpy.error
+from fpy.error import BackendError, CompileError, handle_lark_error
+import fpy.error
 
 fpy_grammar_str = (Path(__file__).parent / "grammar.lark").read_text()
 
@@ -71,8 +71,8 @@ def text_to_ast(text: str):
         maybe_placeholders=True,
     )
 
-    fprime_gds.common.fpy.error.input_text = text
-    fprime_gds.common.fpy.error.input_lines = text.splitlines()
+    fpy.error.input_text = text
+    fpy.error.input_lines = text.splitlines()
     try:
         tree = parser.parse(text, on_error=handle_lark_error)
     except LarkError as e:

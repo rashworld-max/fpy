@@ -4,7 +4,7 @@ import inspect
 import math
 import struct
 import typing
-from fprime_gds.common.fpy.bytecode.directives import (
+from fpy.bytecode.directives import (
     AllocateDirective,
     AndDirective,
     ConstCmdDirective,

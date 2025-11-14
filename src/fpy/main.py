@@ -4,19 +4,17 @@ import argparse
 from pathlib import Path
 import sys
 
-from fprime_gds.common.fpy.bytecode.assembler import (
+from fpy.bytecode.assembler import (
     assemble,
     directives_to_fpybc,
     parse as fpybc_parse,
 )
-import fprime_gds.common.fpy.error
-from fprime_gds.common.fpy.types import (
+from fpy.types import (
     deserialize_directives,
     serialize_directives,
 )
-import fprime_gds.common.fpy.model
-from fprime_gds.common.fpy.model import DirectiveErrorCode, FpySequencerModel
-from fprime_gds.common.fpy.compiler import text_to_ast, ast_to_directives
+from fpy.model import DirectiveErrorCode, FpySequencerModel
+from fpy.compiler import text_to_ast, ast_to_directives
 
 
 def human_readable_size(size_bytes):

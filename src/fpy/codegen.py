@@ -1,5 +1,4 @@
 from __future__ import annotations
-from dataclasses import dataclass
 import inspect
 from typing import Callable, Union, get_args, get_origin
 import typing
@@ -13,14 +12,10 @@ try:
 except ImportError:
     UNION_TYPES = (Union,)
 
-from fprime_gds.common.fpy.ir import Ir, IrGoto, IrIf, IrLabel
-from fprime_gds.common.fpy.model import DirectiveErrorCode
-from fprime_gds.common.fpy.types import (
-    MAX_DIRECTIVES_COUNT,
-    MAX_STACK_SIZE,
+from fpy.ir import Ir, IrGoto, IrIf, IrLabel
+from fpy.model import DirectiveErrorCode
+from fpy.types import (
     SIGNED_INTEGER_TYPES,
-    SPECIFIC_FLOAT_TYPES,
-    SPECIFIC_INTEGER_TYPES,
     SPECIFIC_NUMERIC_TYPES,
     UNSIGNED_INTEGER_TYPES,
     CompileState,
@@ -38,7 +33,7 @@ from fprime_gds.common.fpy.types import (
     is_instance_compat,
 )
 
-from fprime_gds.common.fpy.bytecode.directives import (
+from fpy.bytecode.directives import (
     BINARY_STACK_OPS,
     UNARY_STACK_OPS,
     AllocateDirective,
@@ -73,8 +68,6 @@ from fprime_gds.common.fpy.bytecode.directives import (
     SignedIntToFloatDirective,
     StackCmdDirective,
     Directive,
-    GotoDirective,
-    IfDirective,
     NotDirective,
     PushValDirective,
     StackSizeType,
@@ -85,7 +78,6 @@ from fprime_gds.common.fpy.bytecode.directives import (
     UnaryStackOp,
     UnsignedGreaterThanOrEqualDirective,
     UnsignedIntToFloatDirective,
-    UnsignedLessThanDirective,
 )
 from fprime_gds.common.templates.ch_template import ChTemplate
 from fprime_gds.common.templates.prm_template import PrmTemplate
@@ -98,7 +90,7 @@ from fprime.common.models.serialize.numerical_types import (
     F64Type as F64Value,
     IntegerType as IntegerValue,
 )
-from fprime_gds.common.fpy.syntax import (
+from fpy.syntax import (
     Ast,
     AstAssert,
     AstBinaryOp,

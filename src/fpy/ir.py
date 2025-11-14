@@ -6,9 +6,9 @@ from fprime_gds.common.fpy.bytecode.directives import (
     GotoDirective,
     IfDirective,
 )
-from fprime_gds.common.fpy.error import BackendError
-from fprime_gds.common.fpy.syntax import Ast
-from fprime_gds.common.fpy.types import (
+from fpy.error import BackendError
+from fpy.syntax import Ast
+from fpy.types import (
     MAX_DIRECTIVES_COUNT,
     MAX_STACK_SIZE,
     CompileState,

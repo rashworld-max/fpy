@@ -1,6 +1,6 @@
 from __future__ import annotations
 from fprime_gds.common.fpy.bytecode.directives import BinaryStackOp, Directive
-from fprime_gds.common.fpy.syntax import (
+from fpy.syntax import (
     Ast,
     AstAssign,
     AstBinaryOp,
@@ -10,7 +10,7 @@ from fprime_gds.common.fpy.syntax import (
     AstVar,
     AstWhile,
 )
-from fprime_gds.common.fpy.types import (
+from fpy.types import (
     CompileState,
     ForLoopAnalysis,
     FppType,
