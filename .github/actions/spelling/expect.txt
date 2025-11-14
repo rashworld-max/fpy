@@ -164,6 +164,7 @@ fptosi
 fptoui
 fptrunc
 fpy
+fpyc
 fpybc
 fqn
 fsw
