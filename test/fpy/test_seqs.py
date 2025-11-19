@@ -2592,3 +2592,19 @@ for i in 7..0:
     exit(1)
 """
     assert_run_success(fprime_test_api, seq)
+
+
+def test_simple_func_def(fprime_test_api):
+    seq = """
+def test():
+    pass
+"""
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_def_with_args(fprime_test_api):
+    seq = """
+def test(arg: U8):
+    pass
+"""
+    assert_run_success(fprime_test_api, seq)

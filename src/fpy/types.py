@@ -243,9 +243,14 @@ class FpyCmd(FpyCallable):
 
 
 @dataclass
-class FpyMacro(FpyCallable):
+class FpyInlineMacro(FpyCallable):
     generate: Callable[[AstFuncCall], list[Directive]]
     """a function which instantiates the macro given the calling node"""
+
+
+@dataclass
+class FpyFunction(FpyCallable):
+    body: AstScopedBody
 
 
 @dataclass
@@ -291,7 +296,7 @@ class FpyVariable:
     name: str
     type_ref: AstExpr
     """the expression denoting the var's type"""
-    declaration: AstAssign
+    declaration: Ast
     """the node where this var is declared"""
     type: FppType | None = None
     """the resolved type of the variable. None if type unsure at the moment"""

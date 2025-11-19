@@ -80,6 +80,7 @@ from fpy.syntax import (
     AstBoolean,
     AstBreak,
     AstContinue,
+    AstDef,
     AstElif,
     AstExpr,
     AstFor,
@@ -224,6 +225,13 @@ class CreateVariables(TopDownVisitor):
         state.variables.append(upper_bound_var)
         analysis = ForLoopAnalysis(loop_var, upper_bound_var, reuse_existing_loop_var)
         state.for_loops[node] = analysis
+
+    def visit_AstDef(self, node: AstDef, state: CompileState):
+        # for each arg, make a new variable
+        for arg in node.parameters:
+            arg_name, arg_type = arg
+            arg_var = FpyVariable(arg_name, arg_type, node)
+            
 
 
 class SetEnclosingLoops(Visitor):

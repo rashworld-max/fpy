@@ -24,7 +24,7 @@ from fpy.types import (
     FpyCast,
     FpyCmd,
     FpyFloatValue,
-    FpyMacro,
+    FpyInlineMacro,
     FpyTypeCtor,
     FpyVariable,
     FpyIntegerValue,
@@ -690,7 +690,7 @@ class GenerateCode:
                 # now that all args are pushed to the stack, pop them and opcode off the stack
                 # as a command
                 dirs.append(StackCmdDirective(arg_byte_count))
-        elif is_instance_compat(func, FpyMacro):
+        elif is_instance_compat(func, FpyInlineMacro):
             # put all arg values on stack
             for arg_node in node_args:
                 dirs.extend(self.emit(arg_node, state))

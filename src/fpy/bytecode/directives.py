@@ -150,6 +150,8 @@ class DirectiveId(Enum):
     GET_FIELD = 69
     PEEK = 70
     STORE = 71
+    CALL = 72
+    RETURN = 73
 
 
 class Directive:
@@ -710,6 +712,18 @@ class PeekDirective(Directive):
 @dataclass
 class PushTimeDirective(Directive):
     opcode: ClassVar[DirectiveId] = DirectiveId.PUSH_TIME
+
+
+@dataclass
+class CallDirective(Directive):
+    opcode: ClassVar[DirectiveId] = DirectiveId.CALL
+
+
+@dataclass
+class ReturnDirective(Directive):
+    opcode: ClassVar[DirectiveId] = DirectiveId.RETURN
+
+    return_val_size: StackSizeType
 
 
 for cls in Directive.__subclasses__():

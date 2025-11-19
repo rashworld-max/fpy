@@ -140,6 +140,8 @@ class AstFuncCall(Ast):
 @dataclass
 class AstPass(Ast):
     pass  # ha ha
+
+
 @dataclass
 class AstBinaryOp(Ast):
     lhs: AstExpr
@@ -221,6 +223,13 @@ class AstContinue(Ast):
     pass
 
 
+@dataclass
+class AstDef(Ast):
+    name: str
+    parameters: list[tuple[str, AstExpr]]
+    body: AstScopedBody
+
+
 AstStmt = Union[
     AstExpr,
     AstAssign,
@@ -232,8 +241,11 @@ AstStmt = Union[
     AstContinue,
     AstWhile,
     AstAssert,
+    AstDef,
 ]
-AstStmtWithExpr = Union[AstExpr, AstAssign, AstIf, AstElif, AstFor, AstWhile, AstAssert]
+AstStmtWithExpr = Union[
+    AstExpr, AstAssign, AstIf, AstElif, AstFor, AstWhile, AstAssert, AstDef
+]
 AstNodeWithSideEffects = Union[
     AstFuncCall,
     AstAssign,
@@ -244,6 +256,7 @@ AstNodeWithSideEffects = Union[
     AstAssert,
     AstBreak,
     AstContinue,
+    AstDef,
 ]
 
 
@@ -293,6 +306,15 @@ def no_meta(type):
 
 def handle_str(meta, s: str):
     return s.strip("'").strip('"')
+
+
+def handle_parameters(meta, args):
+    assert len(args) % 2 == 0, args
+    # pair up the arg name and arg type
+    pairs = []
+    for i in range(len(args) // 2):
+        pairs.append((args[i], args[i + 1]))
+    return pairs
 
 
 def handle_assign(meta, args):
@@ -349,6 +371,9 @@ class FpyTransformer(Transformer):
     get_item = AstGetItem
     var = AstVar
     range = AstRange
+
+    def_stmt = AstDef
+    parameters = no_inline(handle_parameters)
 
     NAME = str
     DEC_NUMBER = int

@@ -9,7 +9,7 @@ from fpy.bytecode.directives import (
 )
 from fpy.ir import Ir, IrIf, IrLabel
 from fpy.syntax import Ast
-from fpy.types import FpyMacro, NothingValue
+from fpy.types import FpyInlineMacro, NothingValue
 from fprime.common.models.serialize.time_type import TimeType as TimeValue
 from fprime.common.models.serialize.numerical_types import (
     U8Type as U8Value,
@@ -62,7 +62,7 @@ def generate_abs_float(node: Ast) -> list[Directive | Ir]:
     return dirs
 
 
-MACRO_ABS_FLOAT = FpyMacro("abs", F64Value, [("value", F64Value)], generate_abs_float)
+MACRO_ABS_FLOAT = FpyInlineMacro("abs", F64Value, [("value", F64Value)], generate_abs_float)
 
 
 def generate_abs_signed_int(node: Ast) -> list[Directive | Ir]:
@@ -88,11 +88,11 @@ def generate_abs_signed_int(node: Ast) -> list[Directive | Ir]:
     return dirs
 
 
-MACRO_ABS_SIGNED_INT = FpyMacro(
+MACRO_ABS_SIGNED_INT = FpyInlineMacro(
     "abs", I64Value, [("value", I64Value)], generate_abs_signed_int
 )
 
-MACRO_SLEEP_SECONDS_USECONDS = FpyMacro(
+MACRO_SLEEP_SECONDS_USECONDS = FpyInlineMacro(
     "sleep",
     NothingValue,
     [
@@ -139,7 +139,7 @@ def generate_sleep_float(node: Ast) -> list[Directive | Ir]:
     return dirs
 
 
-MACRO_SLEEP_FLOAT = FpyMacro(
+MACRO_SLEEP_FLOAT = FpyInlineMacro(
     "sleep", NothingValue, [("seconds", F64Value)], generate_sleep_float
 )
 
@@ -152,21 +152,21 @@ def generate_log_signed_int(node: Ast) -> list[Directive | Ir]:
     ]
 
 
-MACROS: dict[str, FpyMacro] = {
+MACROS: dict[str, FpyInlineMacro] = {
     "sleep": MACRO_SLEEP_SECONDS_USECONDS,
-    "sleep_until": FpyMacro(
+    "sleep_until": FpyInlineMacro(
         "sleep_until",
         NothingValue,
         [("wakeup_time", TimeValue)],
         lambda n: [WaitAbsDirective()],
     ),
-    "exit": FpyMacro(
+    "exit": FpyInlineMacro(
         "exit", NothingValue, [("exit_code", U8Value)], lambda n: [ExitDirective()]
     ),
-    "log": FpyMacro(
+    "log": FpyInlineMacro(
         "log", F64Value, [("operand", F64Value)], lambda n: [FloatLogDirective()]
     ),
-    "now": FpyMacro("now", TimeValue, [], lambda n: [PushTimeDirective()]),
+    "now": FpyInlineMacro("now", TimeValue, [], lambda n: [PushTimeDirective()]),
     "iabs": MACRO_ABS_SIGNED_INT,
     "fabs": MACRO_ABS_FLOAT,
 }
