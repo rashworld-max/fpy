@@ -7,6 +7,7 @@ import typing
 from fpy.bytecode.directives import (
     AllocateDirective,
     AndDirective,
+    CallDirective,
     ConstCmdDirective,
     Directive,
     FwOpcodeType,
@@ -22,8 +23,10 @@ from fpy.bytecode.directives import (
     GotoDirective,
     MemCompareDirective,
     PushTimeDirective,
+    ReturnDirective,
     SignedIntDivideDirective,
     SignedModuloDirective,
+    StackSizeType,
     StoreConstOffsetDirective,
     UnsignedIntDivideDirective,
     IntMultiplyDirective,
@@ -224,9 +227,7 @@ class FpySequencerModel:
 
         return ">" + fmt_char
 
-    def push(
-        self, val: int | float | bytes | bytearray | bool, signed=True, size=8
-    ):
+    def push(self, val: int | float | bytes | bytearray | bool, signed=True, size=8):
         if isinstance(val, (bytes, bytearray)):
             self.stack += val
         elif isinstance(val, bool):
@@ -306,10 +307,11 @@ class FpySequencerModel:
         if len(self.stack) + dir.size > self.max_stack_size:
             return DirectiveErrorCode.STACK_OVERFLOW
 
+        if dir.lvar_offset + self.stack_frame_start < 0:
+            return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
         if dir.lvar_offset + self.stack_frame_start + dir.size > len(self.stack):
-            return DirectiveErrorCode.STACK_OVERFLOW
+            return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
 
-        # grab a word beginning at lvar start and put on operand stack
         value = self.stack[
             self.stack_frame_start
             + dir.lvar_offset : (self.stack_frame_start + dir.lvar_offset + dir.size)
@@ -321,10 +323,12 @@ class FpySequencerModel:
         if len(self.stack) < dir.size + 4:
             return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
 
-        lvar_offset = self.pop(size=4, signed=False)
+        lvar_offset = self.pop(size=4, signed=True)
 
+        if lvar_offset + self.stack_frame_start < 0:
+            return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
         if lvar_offset + self.stack_frame_start + dir.size > len(self.stack):
-            return DirectiveErrorCode.STACK_OVERFLOW
+            return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
 
         # get the last `dir.size` bytes of the stack
         value = self.stack[-dir.size :]
@@ -338,8 +342,10 @@ class FpySequencerModel:
         if len(self.stack) < dir.size:
             return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
 
+        if dir.lvar_offset + self.stack_frame_start < 0:
+            return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
         if dir.lvar_offset + self.stack_frame_start + dir.size > len(self.stack):
-            return DirectiveErrorCode.STACK_OVERFLOW
+            return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
 
         # get the last `dir.size` bytes of the stack
         value = self.stack[-dir.size :]
@@ -390,7 +396,9 @@ class FpySequencerModel:
 
         cmd = self.stack[-(dir.args_size + FwOpcodeType.getMaxSize()) :]
         self.stack = self.stack[: -(dir.args_size + FwOpcodeType.getMaxSize())]
-        opcode = int.from_bytes(cmd[-FwOpcodeType.getMaxSize():], signed=False, byteorder="big")
+        opcode = int.from_bytes(
+            cmd[-FwOpcodeType.getMaxSize() :], signed=False, byteorder="big"
+        )
 
         print(
             "cmd opcode",
@@ -398,7 +406,7 @@ class FpySequencerModel:
             "args",
             cmd[:-4],
         )
-        if not self.validate_cmd(opcode, cmd[:-FwOpcodeType.getMaxSize()]):
+        if not self.validate_cmd(opcode, cmd[: -FwOpcodeType.getMaxSize()]):
             raise RuntimeError("Invalid cmd")
         # always push CmdResponse.OK
         self.push(0, size=1)
@@ -876,3 +884,35 @@ class FpySequencerModel:
             return DirectiveErrorCode.STACK_OVERFLOW
 
         self.push(TimeValue(0, 0, 0, 0).serialize())
+
+    def handle_call(self, dir: CallDirective):
+        if len(self.stack) < StackSizeType.getMaxSize():
+            return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
+
+        offset = self.pop(size=StackSizeType.getMaxSize(), signed=False)
+        return_addr = self.next_dir_idx
+        self.next_dir_idx = offset
+        # push instruction ptr
+        self.push(return_addr, size=StackSizeType.getMaxSize(), signed=False)
+        # push frame ptr
+        self.push(self.stack_frame_start, size=StackSizeType.getMaxSize(), signed=False)
+        # update lvar array start to be end of current stack
+        self.stack_frame_start = len(self.stack)
+
+    def handle_return(self, dir: ReturnDirective):
+        if len(self.stack) < dir.return_val_size + StackSizeType.getMaxSize() * 2:
+            return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
+
+        return_val = self.pop(type=bytes, size=dir.return_val_size)
+        # clear the stack until the start of the frame
+        self.stack = self.stack[: self.stack_frame_start]
+        # okay now we have the frame ptr on top
+        frame_ptr = self.pop(size=StackSizeType.getMaxSize(), signed=False)
+        # and now ip on top
+        instruction_ptr = self.pop(size=StackSizeType.getMaxSize(), signed=False)
+        self.stack_frame_start = frame_ptr
+        self.next_dir_idx = instruction_ptr
+        # okay now pop the original args. just discard them
+        self.pop(type=bytes, size=dir.call_args_size)
+        # and push return value
+        self.push(return_val)

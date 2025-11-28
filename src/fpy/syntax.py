@@ -230,8 +230,9 @@ class AstReturn(Ast):
 
 @dataclass
 class AstDef(Ast):
-    name: str
-    parameters: list[tuple[str, AstExpr]]
+    name: AstVar
+    parameters: list[tuple[AstVar, AstExpr]]
+    return_type: Union[AstExpr, None]
     body: AstScopedBody
 
 

@@ -1755,7 +1755,7 @@ exit(1)
 def test_get_variable_array_idx(fprime_test_api):
     seq = """
 val: Svc.ComQueueDepth = Svc.ComQueueDepth(456, 123)
-idx: U8 = 1
+idx: I8 = 1
 if val[idx] == 123:
     exit(0)
 exit(1)
@@ -1767,7 +1767,7 @@ exit(1)
 def test_get_variable_array_idx_oob(fprime_test_api):
     seq = """
 val: Svc.ComQueueDepth = Svc.ComQueueDepth(456, 123)
-idx: U8 = 2
+idx: I8 = 2
 if val[idx] == 123:
     exit(0)
 exit(1)
@@ -1779,7 +1779,7 @@ exit(1)
 def test_set_variable_array_idx_oob(fprime_test_api):
     seq = """
 val: Svc.ComQueueDepth = Svc.ComQueueDepth(456, 123)
-idx: U8 = 2
+idx: I8 = 2
 val[idx] = 111
 """
 
@@ -1789,7 +1789,7 @@ val[idx] = 111
 def test_set_variable_array_idx(fprime_test_api):
     seq = """
 val: Svc.ComQueueDepth = Svc.ComQueueDepth(456, 123)
-idx: U8 = 1
+idx: I8 = 1
 val[idx] = 111
 if val[1] == 111:
     exit(0)
@@ -2630,3 +2630,190 @@ if True:
 """
 
     assert_run_success(fprime_test_api, seq)
+
+
+def test_return_outside_func(fprime_test_api):
+    seq = """
+return
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_simple_return(fprime_test_api):
+    seq = """
+def test():
+    return
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_return_val(fprime_test_api):
+    seq = """
+def test() -> U8:
+    return 1
+
+assert test() == 1
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_wrong_return_type(fprime_test_api):
+    seq = """
+def test() -> U8:
+    return 1.0
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_wrong_arg_type(fprime_test_api):
+    seq = """
+def test(arg: U8):
+    pass
+
+test(1.0)
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_break_in_func_in_loop(fprime_test_api):
+    seq = """
+for i in 0..2:
+    def test(arg: U8):
+        break
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_use_global_ctx_in_func(fprime_test_api):
+    seq = """
+i: U8 = 0
+def test():
+    assert i == 0
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_use_lvar_from_func_outside_func(fprime_test_api):
+    seq = """
+def test():
+    i: U8 = 0
+assert i == 0
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
+
+
+
+def test_use_arg_from_func_outside_func(fprime_test_api):
+    seq = """
+def test(arg: U8):
+    pass
+if arg == 0:
+    pass
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
+
+
+
+def test_func_in_func(fprime_test_api):
+    seq = """
+def test(arg: U8):
+    def test2() -> U8:
+        return 0
+    assert test2() == 0
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_use_func_outside_scope(fprime_test_api):
+    seq = """
+def test(arg: U8):
+    def test2() -> U8:
+        return 0
+
+assert test2() == 0
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_func_call_func(fprime_test_api):
+    seq = """
+def test() -> U8:
+    return 1
+
+def test2() -> U8:
+    return test()
+
+assert test2() == 1
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_func_call_func_before_defined(fprime_test_api):
+    seq = """
+
+def test2() -> U8:
+    return test()
+
+def test() -> U8:
+    return 1
+
+assert test2() == 1
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_two_func_args(fprime_test_api):
+    seq = """
+
+def test(arg: U8, arg: U8):
+    pass
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_redeclare_func(fprime_test_api):
+    seq = """
+
+def test():
+    pass
+def test():
+    pass
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_redeclare_func_from_var(fprime_test_api):
+    seq = """
+
+test: U8 = 0
+def test():
+    pass
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_redeclare_var_from_func(fprime_test_api):
+    seq = """
+
+def test():
+    pass
+test: U8 = 0
+"""
+
+    assert_compile_failure(fprime_test_api, seq)

@@ -7,6 +7,7 @@ import math
 import struct
 import typing
 from typing import Callable, Iterable, Union, get_args, get_origin
+import itertools
 import zlib
 
 from fpy.error import CompileError
@@ -54,6 +55,7 @@ from fpy.syntax import (
     AstReference,
     Ast,
     AstAssign,
+    AstReturn,
     AstScopedBody,
     AstWhile,
 )
@@ -78,9 +80,6 @@ def typename(typ: FppType) -> str:
     if typ == RangeValue:
         return "Range"
     return str(typ)
-
-
-LoopVarValue = I64Value
 
 
 # this is the "internal" integer type that integer literals have by
@@ -123,8 +122,8 @@ class FpyFloatValue(FloatValue):
             raise RuntimeError()
 
 
-# the type produced by range expressions `X .. Y`
 class RangeValue(FppValue):
+    """the type produced by range expressions `X .. Y`"""
     def serialize(self):
         raise NotImplementedError()
 
@@ -150,6 +149,26 @@ class RangeValue(FppValue):
 # we know the value is constant
 FpyStringValue = StringValue.construct_type("FpyStringValue", None)
 
+class FpyCallableValue(FppValue):
+    """the type of a callable"""
+    def serialize(self):
+        raise NotImplementedError()
+
+    def deserialize(self, data, offset):
+        raise NotImplementedError()
+
+    def getSize(self):
+        raise NotImplementedError()
+
+    @classmethod
+    def getMaxSize(cls):
+        raise NotImplementedError()
+
+    def __repr__(self):
+        return self.__class__.__name__
+
+    def to_jsonable(self):
+        raise NotImplementedError()
 
 SPECIFIC_NUMERIC_TYPES = (
     U32Value,
@@ -245,14 +264,13 @@ class FpyCmd(FpyCallable):
 
 
 @dataclass
-class FpyInlineMacro(FpyCallable):
+class FpyInlineBuiltin(FpyCallable):
     generate: Callable[[AstFuncCall], list[Directive]]
-    """a function which instantiates the macro given the calling node"""
-
+    """a function which instantiates the builtin given the calling node"""
 
 @dataclass
 class FpyFunction(FpyCallable):
-    body: AstScopedBody
+    pass
 
 
 @dataclass
@@ -311,6 +329,10 @@ class ForLoopAnalysis:
     loop_var: FpyVariable
     upper_bound_var: FpyVariable
     reuse_existing_loop_var: bool
+    
+@dataclass
+class FuncDefAnalysis:
+    func: FpyFunction
 
 
 # a scope
@@ -468,12 +490,16 @@ class CompileState:
     """map of node to the FpyScope it should resolve names in"""
     for_loops: dict[AstFor, ForLoopAnalysis] = field(default_factory=dict)
     """map of for loops to a ForLoopAnalysis struct, which contains additional info about the loops"""
+    func_defs: dict[AstDef, FuncDefAnalysis] = field(default_factory=dict)
+    """map of function definition nodes to a FuncDefAnalysis struct, which contains additional info about the func def"""
     enclosing_loops: dict[Union[AstBreak, AstContinue], Union[AstFor, AstWhile]] = (
         field(default_factory=dict)
     )
     """map of break/continue to the loop which contains the break/continue"""
     desugared_for_loops: dict[AstWhile, AstFor] = field(default_factory=dict)
     """mapping of while loops which are desugared for loops, to the original node from which they came"""
+
+    enclosing_funcs: dict[AstReturn, AstDef] = field(default_factory=dict)
 
     resolved_references: dict[AstReference, FpyReference] = field(
         default_factory=dict, repr=False
@@ -580,6 +606,9 @@ class Visitor:
             for field in fields(node):
                 field_val = getattr(node, field.name)
                 if isinstance(field_val, list):
+                    # also handle the one case where we have a list of tuples
+                    if isinstance(field_val[0], tuple):
+                        field_val = itertools.chain.from_iterable(field_val)
                     children.extend(field_val)
                 else:
                     children.append(field_val)
@@ -610,6 +639,9 @@ class TopDownVisitor(Visitor):
             for field in fields(node):
                 field_val = getattr(node, field.name)
                 if isinstance(field_val, list):
+                    # also handle the one case where we have a list of tuples
+                    if isinstance(field_val[0], tuple):
+                        field_val = itertools.chain.from_iterable(field_val)
                     children.extend(field_val)
                 else:
                     children.append(field_val)
@@ -705,6 +737,37 @@ class Transformer(Visitor):
 
         _descend(start)
         self._visit(start, state)
+
+class Emitter:
+
+    def __init__(self):
+        self.emitters: dict[type[Ast], Callable] = {}
+        """dict of node type to handler function"""
+        self.build_emitter_dict()
+
+    def build_emitter_dict(self):
+        for name, func in inspect.getmembers(type(self), inspect.isfunction):
+            if not name.startswith("emit_"):
+                # not a visitor, or the default visit func
+                continue
+            signature = inspect.signature(func)
+            params = list(signature.parameters.values())
+            assert len(params) == 3
+            assert params[1].annotation is not None
+            annotations = typing.get_type_hints(func)
+            param_type = annotations[params[1].name]
+
+            origin = get_origin(param_type)
+            if origin in UNION_TYPES:
+                # It's a Union type, so get its arguments.
+                for t in get_args(param_type):
+                    self.emitters[t] = getattr(self, name)
+            else:
+                # It's not a Union, so it's a regular type
+                self.emitters[param_type] = getattr(self, name)
+
+    def emit(self, node: Ast, state: CompileState) -> list[Directive | Ir]:
+        return self.emitters[type(node)](node, state)
 
 
 MAJOR_VERSION = 0

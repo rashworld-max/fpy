@@ -18,8 +18,8 @@ from lark import Lark
 from fprime_gds.common.fpy.bytecode.directives import Directive
 from fpy.codegen import (
     FinalChecks,
-    GenerateFunctionBody,
     GenerateFunctions,
+    GenerateModule,
     IrPass,
     ResolveLabels,
 )
@@ -30,11 +30,14 @@ from fpy.semantics import (
     CalculateConstExprValues,
     CheckBreakAndContinueInLoop,
     CheckConstArrayAccesses,
+    CheckReturnInFunc,
     CheckUseBeforeDeclare,
     CheckUseBeforeDeclareForLoopVariables,
+    CreateFunctions,
     CreateVariables,
     PickTypesAndResolveAttrsAndItems,
-    ResolveVarsTypesAndFuncs,
+    ResolveNameRoots,
+    ResolveTypesAndFuncs,
     WarnRangesAreNotEmpty,
 )
 from fpy.syntax import AstScopedBody, FpyTransformer, PythonIndenter
@@ -186,28 +189,31 @@ def get_base_compile_state(dictionary: str, compile_args: dict) -> CompileState:
 
 
 def ast_to_directives(
-    main_body: AstScopedBody,
+    body: AstScopedBody,
     dictionary: str,
     compile_args: dict | None = None,
 ) -> list[Directive] | CompileError | BackendError:
     compile_args = compile_args or dict()
     state = get_base_compile_state(dictionary, compile_args)
-    state.root = main_body
+    state.root = body
     semantics_passes: list[Visitor] = [
         # assign each node a unique id for indexing/hashing
         AssignIds(),
         # based on position of node in tree, figure out which scope it is in
         AssignLocalScopes(),
         # based on assignment syntax nodes, we know which variables exist where
+        CreateFunctions(),
         CreateVariables(),
         # check that break/continue are in loops, and store which loop they're in
         CheckBreakAndContinueInLoop(),
+        CheckReturnInFunc(),
         # now that variables have been defined, we can resolve all "single word"
         # nodes in the tree, to either some namespace or a var probs
         # also, because types have a restricted set of possible syntax, resolve them
         # before we resolve other things. this means we can also figure out the type of variables
         # at this stage
-        ResolveVarsTypesAndFuncs(),
+        ResolveNameRoots(),
+        ResolveTypesAndFuncs(),
         # make sure we don't use any variables before they are declared
         CheckUseBeforeDeclare(),
         CheckUseBeforeDeclareForLoopVariables(),
@@ -224,23 +230,28 @@ def ast_to_directives(
         DesugarForLoops(),
     ]
     codegen_passes = [
+        # generate all function bodies
         GenerateFunctions()
     ]
-    main_func_generator = GenerateFunctionBody()
+    module_generator = GenerateModule()
+
     ir_passes: list[IrPass] = [ResolveLabels(), FinalChecks()]
 
     for compile_pass in semantics_passes:
-        compile_pass.run(main_body, state)
+        compile_pass.run(body, state)
         if len(state.errors) != 0:
             return state.errors[0]
     for compile_pass in desugaring_passes:
-        compile_pass.run(main_body, state)
+        compile_pass.run(body, state)
         if len(state.errors) != 0:
             return state.errors[0]
+
     for compile_pass in codegen_passes:
-        compile_pass.run(main_body, state)
+        compile_pass.run(body, state)
         if len(state.errors) != 0:
             return state.errors[0]
+
+    ir = module_generator.emit(body, state)
     
     for compile_pass in ir_passes:
         ir = compile_pass.run(ir, state)

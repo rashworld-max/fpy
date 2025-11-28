@@ -21,13 +21,14 @@ from fpy.types import (
     SPECIFIC_NUMERIC_TYPES,
     UNSIGNED_INTEGER_TYPES,
     CompileState,
+    Emitter,
     FieldReference,
     FppType,
     FpyCast,
     FpyCmd,
     FpyFloatValue,
     FpyFunction,
-    FpyInlineMacro,
+    FpyInlineBuiltin,
     FpyTypeCtor,
     FpyVariable,
     FpyIntegerValue,
@@ -73,6 +74,7 @@ from fpy.bytecode.directives import (
     NoOpDirective,
     IntegerTruncate64To32Directive,
     ReturnDirective,
+    SignedGreaterThanOrEqualDirective,
     SignedIntToFloatDirective,
     StackCmdDirective,
     Directive,
@@ -93,6 +95,7 @@ from fprime.common.models.serialize.array_type import ArrayType as ArrayValue
 from fprime.common.models.serialize.numerical_types import (
     U8Type as U8Value,
     U64Type as U64Value,
+    I32Type as I32Value,
     I64Type as I64Value,
     F32Type as F32Value,
     F64Type as F64Value,
@@ -129,12 +132,8 @@ class GenerateFunctions(Visitor):
         code = GenerateFunctionBody().emit(node.body, state)
         state.generated_funcs[node] = code
 
-class GenerateFunctionBody:
 
-    def __init__(self):
-        self.emitters: dict[type[Ast], Callable] = {}
-        """dict of node type to handler function"""
-        self.build_emitter_dict()
+class GenerateFunctionBody(Emitter):
 
     def try_emit_expr_as_const(
         self, node: AstExpr, state: CompileState
@@ -186,7 +185,8 @@ class GenerateFunctionBody:
         self, from_type: FppType, to_type: FppType
     ) -> list[Directive]:
         """
-        return a list of dirs needed to convert a numeric stack value of from_type to a stack value of to_type"""
+        return a list of dirs needed to convert a numeric stack value of from_type to a stack value of to_type
+        """
         if from_type == to_type:
             return []
 
@@ -284,7 +284,9 @@ class GenerateFunctionBody:
             else:
                 return [IntegerZeroExtend32To64Directive()]
 
-    def calc_lvar_offset_of_array_element(self, node: Ast, idx_expr: AstExpr, array_type: FppType, state: CompileState) -> list[Directive|Ir]:
+    def calc_lvar_offset_of_array_element(
+        self, node: Ast, idx_expr: AstExpr, array_type: FppType, state: CompileState
+    ) -> list[Directive | Ir]:
         """generates code to push to stack the U64 byte offset in the array for an array access, while performing an array oob
         check. idx_expr is the expression to calculate the index, and dest is the FieldReference containing info about the
         dest array"""
@@ -303,13 +305,13 @@ class GenerateFunctionBody:
         # offset
         dirs.append(PushValDirective(StackSizeType(0).serialize()))
         dirs.append(PeekDirective())  # duplicate the index
-        # convert idx to u64
-        dirs.extend(self.convert_numeric_type(ArrayIndexType, U64Value))
+        # convert idx to i64
+        dirs.extend(self.convert_numeric_type(ArrayIndexType, I64Value))
         dirs.append(
-            PushValDirective(U64Value(array_type.LENGTH).serialize())
-        )  # push the length as U64
+            PushValDirective(I64Value(array_type.LENGTH).serialize())
+        )  # push the length as I64
         # check if idx >= length
-        dirs.append(UnsignedGreaterThanOrEqualDirective())
+        dirs.append(SignedGreaterThanOrEqualDirective())
         # if true, fail with error code, otherwise go to after check
         oob_check_end_label = IrLabel(node, "oob_check_end")
         dirs.append(IrIf(oob_check_end_label))
@@ -324,36 +326,9 @@ class GenerateFunctionBody:
         # okay we're good. should still have the idx on the stack
 
         # multiply the index by the member type size
-        dirs.append(
-            PushValDirective(U64Value(array_type.MEMBER_TYPE.getMaxSize()))
-        )
+        dirs.append(PushValDirective(U64Value(array_type.MEMBER_TYPE.getMaxSize())))
         dirs.append(IntMultiplyDirective())
         return dirs
-
-
-    def build_emitter_dict(self):
-        for name, func in inspect.getmembers(type(self), inspect.isfunction):
-            if not name.startswith("emit_"):
-                # not a visitor, or the default visit func
-                continue
-            signature = inspect.signature(func)
-            params = list(signature.parameters.values())
-            assert len(params) == 3
-            assert params[1].annotation is not None
-            annotations = typing.get_type_hints(func)
-            param_type = annotations[params[1].name]
-
-            origin = get_origin(param_type)
-            if origin in UNION_TYPES:
-                # It's a Union type, so get its arguments.
-                for t in get_args(param_type):
-                    self.emitters[t] = getattr(self, name)
-            else:
-                # It's not a Union, so it's a regular type
-                self.emitters[param_type] = getattr(self, name)
-
-    def emit(self, node: Ast, state: CompileState) -> list[Directive | Ir]:
-        return self.emitters[type(node)](node, state)
 
     def emit_AstScopedBody(self, node: AstScopedBody, state: CompileState):
         dirs = []
@@ -507,7 +482,6 @@ class GenerateFunctionBody:
 
         return dirs
 
-
     def emit_AstFor(self, node: AstFor, state: CompileState):
         # should have been desugared out
         assert False, node
@@ -530,7 +504,7 @@ class GenerateFunctionBody:
             parent_type.MEMBER_TYPE,
             unconverted_type,
         )
-        
+
         # okay, we want to get an element from an array on the stack
 
         # TODO optimization: leave it in the lvar array instead of pushing the whole thing to stack
@@ -538,7 +512,9 @@ class GenerateFunctionBody:
         dirs = self.emit(node.parent, state)
 
         # calculate the offset in the parent array
-        dirs.extend(self.calc_lvar_offset_of_array_element(node, node.item, parent_type, state))
+        dirs.extend(
+            self.calc_lvar_offset_of_array_element(node, node.item, parent_type, state)
+        )
         # truncate back to StackSizeType which is what get field uses
         dirs.extend(self.convert_numeric_type(U64Value, StackSizeType))
 
@@ -729,7 +705,7 @@ class GenerateFunctionBody:
                 # now that all args are pushed to the stack, pop them and opcode off the stack
                 # as a command
                 dirs.append(StackCmdDirective(arg_byte_count))
-        elif is_instance_compat(func, FpyInlineMacro):
+        elif is_instance_compat(func, FpyInlineBuiltin):
             # put all arg values on stack
             for arg_node in node_args:
                 dirs.extend(self.emit(arg_node, state))
@@ -815,22 +791,27 @@ class GenerateFunctionBody:
             # only one case where that can be:
             assert is_instance_compat(lhs, FieldReference) and lhs.is_array_element, lhs
 
-
             # we need to calculate absolute offset in lvar array
             # == (parent offset) + (offset in parent)
 
             # offset in parent:
             lhs_parent_type = state.expr_converted_types[lhs.parent_expr]
-            dirs.extend(self.calc_lvar_offset_of_array_element(node, lhs.idx_expr, lhs_parent_type, state))
+            dirs.extend(
+                self.calc_lvar_offset_of_array_element(
+                    node, lhs.idx_expr, lhs_parent_type, state
+                )
+            )
 
             # parent offset:
-            dirs.append(PushValDirective(U64Value(lhs.base_ref.lvar_offset).serialize()))
+            dirs.append(
+                PushValDirective(U64Value(lhs.base_ref.lvar_offset).serialize())
+            )
 
             # add them
             dirs.append(IntAddDirective())
 
-            # and now convert the u64 back into the StackSizeType that store expects
-            dirs.extend(self.convert_numeric_type(U64Value, StackSizeType))
+            # and now convert the u64 back into the I32Value that store expects
+            dirs.extend(self.convert_numeric_type(U64Value, I32Value))
 
             # now that lvar array offset is pushed, use it to store in lvar array
             dirs.append(StoreDirective(lhs.type.getMaxSize()))
@@ -862,6 +843,22 @@ class GenerateFunctionBody:
         dirs.append(end_label)
 
         return dirs
+
+
+class GenerateModule(Emitter):
+    def emit_AstScopedBody(self, node: AstScopedBody, state: CompileState):
+        if node is not state.root:
+            return []
+
+        # otherwise, first emit all the funcs at the top, then emit the main body
+        funcs_code = []
+        for generated_func in state.generated_funcs.values():
+            funcs_code.extend(generated_func)
+
+        # now generate the main function
+        main_body = GenerateFunctionBody().emit(node, state)
+        return funcs_code + main_body
+
 
 class IrPass:
     def run(

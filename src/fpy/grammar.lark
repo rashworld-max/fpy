@@ -11,7 +11,7 @@ pass_stmt: "pass"
 break_stmt: "break"
 continue_stmt: "continue"
 
-expr_stmt: expr
+?expr_stmt: expr
 
 
 assert_stmt: "assert" expr ["," expr]
@@ -22,8 +22,8 @@ return_stmt: "return" [expr]
 
 assign: expr [":" expr] "=" expr
 
-parameters: name ":" expr ("," name ":" expr)*
-def_stmt: "def" name "(" [parameters] ")" ":" scoped_body
+parameters: var ":" expr ("," var ":" expr)*
+def_stmt: "def" var "(" [parameters] ")" ["->" expr] ":" scoped_body
 
 # loops
 for_stmt: "for" var "in" expr ":" body

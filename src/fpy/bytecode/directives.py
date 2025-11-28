@@ -36,8 +36,9 @@ FwSizeType = U64Value
 FwChanIdType = U32Value
 FwPrmIdType = U32Value
 FwOpcodeType = U32Value
-ArrayIndexType = U64Value
+ArrayIndexType = I64Value
 StackSizeType = U32Value
+LoopVarType = ArrayIndexType
 
 
 def get_union_members(type_hint: type) -> list[type]:
@@ -289,7 +290,7 @@ class MemCompareDirective(Directive):
 class LoadDirective(Directive):
     opcode: ClassVar[DirectiveId] = DirectiveId.LOAD
 
-    lvar_offset: Union[int, StackSizeType]
+    lvar_offset: Union[int, I32Value]
     size: Union[int, StackSizeType]
 
 
@@ -365,7 +366,7 @@ class StoreDirective(Directive):
 class StoreConstOffsetDirective(Directive):
     opcode: ClassVar[DirectiveId] = DirectiveId.STORE_CONST_OFFSET
 
-    lvar_offset: Union[int, StackSizeType]
+    lvar_offset: Union[int, I32Value]
     size: Union[int, StackSizeType]
 
 
@@ -724,6 +725,7 @@ class ReturnDirective(Directive):
     opcode: ClassVar[DirectiveId] = DirectiveId.RETURN
 
     return_val_size: Union[int, StackSizeType]
+    call_args_size: Union[int, StackSizeType]
 
 
 for cls in Directive.__subclasses__():
