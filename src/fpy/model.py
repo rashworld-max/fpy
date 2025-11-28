@@ -908,7 +908,9 @@ class FpySequencerModel:
         if len(self.stack) < dir.return_val_size + StackSizeType.getMaxSize() * 2:
             return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
 
-        return_val = self.pop(type=bytes, size=dir.return_val_size)
+        return_val = b""
+        if dir.return_val_size > 0:
+            return_val = self.pop(type=bytes, size=dir.return_val_size)
         # clear the stack until the start of the frame
         self.stack = self.stack[: self.stack_frame_start]
         # okay now we have the frame ptr on top
@@ -919,5 +921,6 @@ class FpySequencerModel:
         self.next_dir_idx = instruction_ptr
         # okay now pop the original args. just discard them
         self.pop(type=bytes, size=dir.call_args_size)
-        # and push return value
-        self.push(return_val)
+        # and push return value if one exists
+        if dir.return_val_size > 0:
+            self.push(return_val)

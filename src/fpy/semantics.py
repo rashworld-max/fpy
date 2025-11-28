@@ -360,6 +360,7 @@ class ResolveNameRoots(TopDownVisitor):
         global_scope: FpyScope,
         global_scope_name: str,
         state: CompileState,
+        search_local_scope: bool = True,
     ) -> bool:
         """
         recursively tries to resolve the root of a reference. if any node in the chain is not a reference, return True.
@@ -379,7 +380,9 @@ class ResolveNameRoots(TopDownVisitor):
 
         # okay now we have a var
         # see if it's something defined in the script
-        resolved = self.resolve_local_name(node, state)
+        resolved = None
+        if search_local_scope:
+            resolved = self.resolve_local_name(node, state)
 
         if resolved is None:
             # unable to find this symbol in the hierarchy of local scopes
@@ -435,7 +438,9 @@ class ResolveNameRoots(TopDownVisitor):
             return
 
         if node.type_ann is not None:
-            if not self.try_resolve_root_ref(node.type_ann, state.types, "type", state):
+            if not self.try_resolve_root_ref(
+                node.type_ann, state.types, "type", state, search_local_scope=False
+            ):
                 return
 
         if not self.try_resolve_root_ref(
@@ -507,7 +512,11 @@ class ResolveNameRoots(TopDownVisitor):
 
         if node.return_type is not None:
             if not self.try_resolve_root_ref(
-                node.return_type, state.types, "type", state
+                node.return_type,
+                state.types,
+                "type",
+                state,
+                search_local_scope=False,
             ):
                 return
 
@@ -519,7 +528,11 @@ class ResolveNameRoots(TopDownVisitor):
                     return
 
                 if not self.try_resolve_root_ref(
-                    arg_type_expr, state.types, "type", state
+                    arg_type_expr,
+                    state.types,
+                    "type",
+                    state,
+                    search_local_scope=False,
                 ):
                     return
 
@@ -1960,10 +1973,10 @@ class CheckAllBranchesReturn(Visitor):
 
 class CheckFunctionReturns(Visitor):
     def visit_AstDef(self, node: AstDef, state: CompileState):
+        CheckAllBranchesReturn().run(node.body, state)
         if node.return_type is None:
             # don't need to return explicitly
             return
-        CheckAllBranchesReturn().run(node.body, state)
         if not state.does_return[node.body]:
             state.err(
                 f"Function '{node.name.var}' does not always return a value", node

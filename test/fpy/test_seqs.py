@@ -3015,3 +3015,26 @@ exit(1)
 """
 
     assert_run_success(fprime_test_api, seq)
+
+
+def test_void_function_without_explicit_return(fprime_test_api):
+    seq = """
+def noop():
+    pass
+
+noop()
+exit(0)
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_param_name_matching_type(fprime_test_api):
+    seq = """
+def echo(U32: U32) -> U32:
+    return U32
+
+assert echo(5) == 5
+"""
+
+    assert_run_success(fprime_test_api, seq)

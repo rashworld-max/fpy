@@ -137,6 +137,12 @@ class GenerateFunctions(Visitor):
         entry_label = state.func_entry_labels[node]
         code = [entry_label]
         code.extend(GenerateFunctionBody().emit(node.body, state))
+        func = state.resolved_references[node.name]
+        if func.return_type is NothingValue and not state.does_return[node.body]:
+            arg_bytes = sum(
+                arg_type.getMaxSize() for _, arg_type in (func.args or [])
+            )
+            code.append(ReturnDirective(0, arg_bytes))
         state.generated_funcs[node] = code
 
 
