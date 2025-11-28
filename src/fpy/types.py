@@ -270,7 +270,7 @@ class FpyInlineBuiltin(FpyCallable):
 
 @dataclass
 class FpyFunction(FpyCallable):
-    pass
+    definition: AstDef
 
 
 @dataclass
@@ -320,7 +320,7 @@ class FpyVariable:
     """the node where this var is declared"""
     type: FppType | None = None
     """the resolved type of the variable. None if type unsure at the moment"""
-    lvar_offset: int | None = None
+    frame_offset: int | None = None
     """the offset in the lvar array where this var is stored"""
 
 
@@ -533,7 +533,7 @@ class CompileState:
     for_loop_inc_labels: dict[AstWhile, IrLabel] = field(default_factory=dict)
     """for loop node (desugared into a while) mapped to a label pointing to its increment stmt"""
 
-    func_entry_labels: dict[FpyFunction, IrLabel] = field(default_factory=dict)
+    func_entry_labels: dict[AstDef, IrLabel] = field(default_factory=dict)
     """function to entry point label"""
 
     generated_funcs: dict[AstDef, list[Directive|Ir]] = field(default_factory=dict)

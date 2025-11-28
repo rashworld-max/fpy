@@ -19,6 +19,9 @@ class IrLabel(Ir):
     def __eq__(self, value):
         return isinstance(value, IrLabel) and value.name == self.name
 
+    def __repr__(self):
+        return f"IrLabel({self.name})"
+
 
 @dataclass(frozen=True, unsafe_hash=True)
 class IrGoto(Ir):

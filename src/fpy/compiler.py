@@ -241,6 +241,7 @@ def ast_to_directives(
         compile_pass.run(body, state)
         if len(state.errors) != 0:
             return state.errors[0]
+
     for compile_pass in desugaring_passes:
         compile_pass.run(body, state)
         if len(state.errors) != 0:
@@ -252,6 +253,7 @@ def ast_to_directives(
             return state.errors[0]
 
     ir = module_generator.emit(body, state)
+    print("\n".join(str(i) for i in ir))
     
     for compile_pass in ir_passes:
         ir = compile_pass.run(ir, state)

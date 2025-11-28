@@ -18,7 +18,6 @@ from fpy.types import (
     FpyCast,
     FpyFloatValue,
     FpyFunction,
-    FpyCallableValue,
     FpyReference,
     FpyScope,
     FpyTypeCtor,
@@ -53,6 +52,7 @@ from fpy.bytecode.directives import (
     LoopVarType,
     BinaryStackOp,
     MemCompareDirective,
+    StackSizeType,
     UnaryStackOp,
 )
 from fprime_gds.common.templates.ch_template import ChTemplate
@@ -144,7 +144,7 @@ class AssignLocalScopes(TopDownVisitor):
         scope = FpyScope()
         state.scope_parents[scope] = parent_scope
         SetLocalScope(scope).run(node, state)
-        # the node itself 
+        # the node itself
         state.local_scopes[node] = parent_scope
 
 
@@ -157,6 +157,7 @@ class CreateFunctions(Visitor):
             return_type=None,
             # we don't know the arg types yet
             args=None,
+            definition=node,
         )
 
         state.local_scopes[node][func.name] = func
@@ -526,6 +527,12 @@ class ResolveNameRoots(TopDownVisitor):
                 ):
                     return
 
+    def visit_AstReturn(self, node: AstReturn, state: CompileState):
+        if not self.try_resolve_root_ref(
+            node.value, state.runtime_values, "value", state
+        ):
+            return
+
     def visit_AstLiteral_AstGetAttr(
         self, node: Union[AstLiteral, AstGetAttr], state: CompileState
     ):
@@ -620,10 +627,16 @@ class ResolveTypesAndFuncs(TopDownVisitor):
                 # already errored
                 return
             func.return_type = return_type
+        else:
+            func.return_type = NothingValue
 
         args = []
         if node.parameters is not None:
-            for arg_name_var, arg_type_expr in node.parameters:
+            # go in reverse because that's easiest to calc stack offset relative
+            # to frame ptr
+            # start out at -8 bytes because that's where the fp/ip will go
+            offset = -StackSizeType.getMaxSize() * 2
+            for arg_name_var, arg_type_expr in reversed(node.parameters):
                 # don't need to do arg_name because it's a var, already done
                 arg_var = state.resolved_references[arg_name_var]
 
@@ -633,6 +646,8 @@ class ResolveTypesAndFuncs(TopDownVisitor):
                 if arg_type is None:
                     # already errored
                     return
+                offset -= arg_type.getMaxSize()
+                arg_var.frame_offset = offset
 
                 # must be a type because we resolved it in type
                 assert is_instance_compat(arg_type, type), arg_type
@@ -640,6 +655,9 @@ class ResolveTypesAndFuncs(TopDownVisitor):
                 # arg var struct
                 args.append((arg_name_var.var, arg_type))
                 arg_var.type = arg_type
+
+            # unreverse the args
+            args = list(reversed(args))
 
         func.args = args
 
@@ -1314,6 +1332,19 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
         # nothing to do for func def. yes it has exprs but those exprs
         # are just types which we don't care about the value of
         pass
+
+    def visit_AstReturn(self, node: AstReturn, state: CompileState):
+        func = state.enclosing_funcs[node]
+        func = state.resolved_references[func.name]
+        if func.return_type is NothingValue and node.value is not None:
+            state.err("Expected no return value", node.value)
+            return
+        if func.return_type is not NothingValue and node.value is None:
+            state.err(f"Expected a return value of type {typename(func.return_type)}", node.value)
+            return
+        if node.value is not None:
+            if not self.coerce_expr_type(node.value, func.return_type, state):
+                return
 
     def visit_default(self, node, state):
         # coding error, missed an expr

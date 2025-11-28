@@ -2817,3 +2817,19 @@ test: U8 = 0
 """
 
     assert_compile_failure(fprime_test_api, seq)
+
+
+def test_fib(fprime_test_api):
+    seq = """
+def fib(a: U64) -> U64:
+    if a < 2:
+        return 1
+    return fib(a - 1) + fib(a - 2)
+
+assert fib(0) == 1
+assert fib(1) == 1
+assert fib(2) == 2
+assert fib(4) == 5
+"""
+
+    assert_run_success(fprime_test_api, seq)

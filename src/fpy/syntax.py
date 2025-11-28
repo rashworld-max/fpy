@@ -248,9 +248,10 @@ AstStmt = Union[
     AstWhile,
     AstAssert,
     AstDef,
+    AstReturn
 ]
 AstStmtWithExpr = Union[
-    AstExpr, AstAssign, AstIf, AstElif, AstFor, AstWhile, AstAssert, AstDef
+    AstExpr, AstAssign, AstIf, AstElif, AstFor, AstWhile, AstAssert, AstDef, AstReturn
 ]
 AstNodeWithSideEffects = Union[
     AstFuncCall,
@@ -263,6 +264,7 @@ AstNodeWithSideEffects = Union[
     AstBreak,
     AstContinue,
     AstDef,
+    AstReturn
 ]
 
 

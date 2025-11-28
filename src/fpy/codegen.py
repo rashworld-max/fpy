@@ -129,7 +129,10 @@ from fpy.syntax import (
 
 class GenerateFunctions(Visitor):
     def visit_AstDef(self, node: AstDef, state: CompileState):
-        code = GenerateFunctionBody().emit(node.body, state)
+        entry_label = IrLabel(node, "entry")
+        state.func_entry_labels[node] = entry_label
+        code = [entry_label]
+        code.extend(GenerateFunctionBody().emit(node.body, state))
         state.generated_funcs[node] = code
 
 
@@ -339,9 +342,9 @@ class GenerateFunctionBody(Emitter):
             if not is_instance_compat(ref, FpyVariable):
                 # doesn't require space to be allocated
                 continue
-            if ref.lvar_offset is not None:
-                # already have allocated space for it
-                lvar_array_size_bytes += ref.type.getMaxSize()
+            if ref.frame_offset is not None:
+                # it's on the stack, before the start of the frame
+                assert ref.frame_offset < 0
                 continue
             # doesn't have an lvar offset, allocate one at the end of
             # the current array
@@ -475,10 +478,18 @@ class GenerateFunctionBody(Emitter):
         # don't generate other functions, just do this one
         return []
 
-    def visit_AstReturn(self, node: AstReturn, state: CompileState):
-        dirs = self.emit(node.value, state)
-        value_size = state.expr_converted_types[node.value].getMaxSize()
-        dirs.append(ReturnDirective(value_size))
+    def emit_AstReturn(self, node: AstReturn, state: CompileState):
+        enclosing_func = state.enclosing_funcs[node]
+        enclosing_func = state.resolved_references[enclosing_func.name]
+        func_args_size = sum(arg_type.getMaxSize() for arg_name, arg_type in enclosing_func.args)
+
+        if node.value is not None:
+            dirs = self.emit(node.value, state)
+            value_size = state.expr_converted_types[node.value].getMaxSize()
+        else:
+            dirs = []
+            value_size = 0
+        dirs.append(ReturnDirective(value_size, func_args_size))
 
         return dirs
 
@@ -543,7 +554,7 @@ class GenerateFunctionBody(Emitter):
         assert is_instance_compat(ref, FpyVariable), ref
 
         # already should be in an lvar
-        dirs = [LoadDirective(ref.lvar_offset, ref.type.getMaxSize())]
+        dirs = [LoadDirective(ref.frame_offset, ref.type.getMaxSize())]
 
         unconverted_type = state.expr_unconverted_types[node]
         converted_type = state.expr_converted_types[node]
@@ -575,7 +586,7 @@ class GenerateFunctionBody(Emitter):
             dirs.append(PushPrmDirective(ref.get_id()))
         elif is_instance_compat(ref, FpyVariable):
             # already should be in an lvar
-            dirs.append(LoadDirective(ref.lvar_offset, ref.type.getMaxSize()))
+            dirs.append(LoadDirective(ref.frame_offset, ref.type.getMaxSize()))
         elif is_instance_compat(ref, FieldReference):
             # okay, put parent dirs in first
             dirs.extend(self.emit(ref.parent_expr, state))
@@ -725,7 +736,7 @@ class GenerateFunctionBody(Emitter):
             for arg_node in node_args:
                 dirs.extend(self.emit(arg_node, state))
             # okay, args are on the stack. now we're going to generate CALL
-            func_entry_label = state.func_entry_labels[func]
+            func_entry_label = state.func_entry_labels[func.definition]
             # push the offset of the func
             dirs.append(IrPushLabelOffset(func_entry_label))
             # pop it off the stack and perform func call
@@ -746,7 +757,7 @@ class GenerateFunctionBody(Emitter):
 
         const_lvar_offset = -1
         if is_instance_compat(lhs, FpyVariable):
-            const_lvar_offset = lhs.lvar_offset
+            const_lvar_offset = lhs.frame_offset
             assert const_lvar_offset is not None, lhs
         else:
             # okay now push the lvar arr offset to stack
@@ -757,7 +768,7 @@ class GenerateFunctionBody(Emitter):
             # okay, are we assigning to a member or an element?
             if lhs.is_struct_member:
                 # if it's a struct, then the lvar offset is always constant
-                const_lvar_offset = lhs.base_offset + lhs.base_ref.lvar_offset
+                const_lvar_offset = lhs.base_offset + lhs.base_ref.frame_offset
             else:
                 assert lhs.is_array_element
                 # again, offset is the offset in base type + offset of base lvar
@@ -772,7 +783,7 @@ class GenerateFunctionBody(Emitter):
                     # okay, so we have a constant value index
                     lhs_parent_type = state.expr_converted_types[lhs.parent_expr]
                     const_lvar_offset = (
-                        lhs.base_ref.lvar_offset
+                        lhs.base_ref.frame_offset
                         + const_idx_expr_value.val
                         * lhs_parent_type.MEMBER_TYPE.getMaxSize()
                     )
@@ -804,7 +815,7 @@ class GenerateFunctionBody(Emitter):
 
             # parent offset:
             dirs.append(
-                PushValDirective(U64Value(lhs.base_ref.lvar_offset).serialize())
+                PushValDirective(U64Value(lhs.base_ref.frame_offset).serialize())
             )
 
             # add them
@@ -852,8 +863,11 @@ class GenerateModule(Emitter):
 
         # otherwise, first emit all the funcs at the top, then emit the main body
         funcs_code = []
-        for generated_func in state.generated_funcs.values():
-            funcs_code.extend(generated_func)
+        func_code_end_label = IrLabel(node, "main")
+        funcs_code.append(IrGoto(func_code_end_label))
+        for func, code in state.generated_funcs.items():
+            funcs_code.extend(code)
+        funcs_code.append(func_code_end_label)
 
         # now generate the main function
         main_body = GenerateFunctionBody().emit(node, state)
