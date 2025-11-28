@@ -80,6 +80,7 @@ from fprime.common.models.serialize.bool_type import BoolType as BoolValue
 from fpy.syntax import (
     AstAssert,
     AstBinaryOp,
+    AstBody,
     AstBoolean,
     AstBreak,
     AstContinue,
@@ -90,10 +91,12 @@ from fpy.syntax import (
     AstGetAttr,
     AstGetItem,
     AstNumber,
+    AstPass,
     AstRange,
     AstReference,
     AstReturn,
     AstScopedBody,
+    AstStmt,
     AstStmtWithExpr,
     AstString,
     Ast,
@@ -146,29 +149,6 @@ class AssignLocalScopes(TopDownVisitor):
         SetLocalScope(scope).run(node, state)
         # the node itself
         state.local_scopes[node] = parent_scope
-
-
-class CreateFunctions(Visitor):
-    def visit_AstDef(self, node: AstDef, state: CompileState):
-        func = FpyFunction(
-            # we know the name
-            node.name.var,
-            # we don't know the return type yet
-            return_type=None,
-            # we don't know the arg types yet
-            args=None,
-            definition=node,
-        )
-
-        state.local_scopes[node][func.name] = func
-
-        info = FuncDefAnalysis(func)
-        state.func_defs[node] = info
-
-        # the problem is that the function may be evaluated anywhere in the program
-        # this means that we cannot be sure which variables have values at this point
-        # i guess really, it means that the function only knows for sure that the dictionary types,
-        # and args exist
 
 
 class CreateVariables(TopDownVisitor):
@@ -263,8 +243,23 @@ class CreateVariables(TopDownVisitor):
         state.for_loops[node] = analysis
 
     def visit_AstDef(self, node: AstDef, state: CompileState):
-        # for each arg, make a new variable in the scope
-        # of the node
+        existing_func = state.local_scopes[node].get(node.name.var)
+        if existing_func is not None:
+            state.err(f"'{node.name.var}' has already been declared", node.name)
+            return
+
+        func = FpyFunction(
+            # we know the name
+            node.name.var,
+            # we don't know the return type yet
+            return_type=None,
+            # we don't know the arg types yet
+            args=None,
+            definition=node,
+        )
+
+        state.local_scopes[node][func.name] = func
+
         if node.parameters is None:
             # no arguments
             return
@@ -1340,7 +1335,10 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
             state.err("Expected no return value", node.value)
             return
         if func.return_type is not NothingValue and node.value is None:
-            state.err(f"Expected a return value of type {typename(func.return_type)}", node.value)
+            state.err(
+                f"Expected a return value of type {typename(func.return_type)}",
+                node.value,
+            )
             return
         if node.value is not None:
             if not self.coerce_expr_type(node.value, func.return_type, state):
@@ -1861,11 +1859,80 @@ class CalculateConstExprValues(Visitor):
         assert not is_instance_compat(node, AstExpr), node
 
 
+class CheckExpressionsInLocalScopeOrAreConsts(Visitor):
+    def __init__(self, scope: FpyScope):
+        super().__init__()
+        self.scope = scope
+
+    def visit_AstVar(self, node: AstVar, state: CompileState):
+        var = state.resolved_references[node]
+        if not is_instance_compat(var, (FpyVariable, FieldReference)):
+            return
+
+        if node.var not in state.local_scopes[node]:
+            # if it wasn't declared in this scope
+            state.err(f"Cannot access {node.var} in this scope", node)
+            return
+
+
 class CheckFunctionsAccessConstExprsFromOutsideScope(Visitor):
     def visit_AstDef(self, node: AstDef, state: CompileState):
         # inside the body, we should only be accessing these things:
         # arguments, dict stuff, and things with a compile time constant value
-        pass
+        CheckExpressionsInLocalScopeOrAreConsts(state.local_scopes[node.body]).run(
+            node.body, state
+        )
+
+
+class CheckAllBranchesReturn(Visitor):
+    def visit_AstReturn(self, node: AstReturn, state: CompileState):
+        state.does_return[node] = True
+
+    def visit_AstBody(self, node: Union[AstBody, AstScopedBody], state: CompileState):
+        state.does_return[node] = any(state.does_return[n] for n in node.stmts)
+
+    def visit_AstIf(self, node: AstIf, state: CompileState):
+        # an if statement returns if all of its branches return
+        returns = [state.does_return[node.body]]
+        if node.els is not None:
+            returns.append(state.does_return[node.els])
+        for _elif in node.elifs.cases:
+            returns.append(state.does_return[_elif])
+        state.does_return[node] = all(returns)
+
+    def visit_AstElif(
+        self, node: Union[AstElif], state: CompileState
+    ):
+        state.does_return[node] = state.does_return[node.body]
+
+    def visit_AstDef(self, node: AstDef, state: CompileState):
+        # if we found another func def inside this body, it definitely doesn't return
+        state.does_return[node] = False
+
+    def visit_AstAssign_AstPass_AstAssert_AstContinue_AstBreak_AstWhile_AstFor(
+        self,
+        node: Union[AstAssign, AstPass, AstAssert, AstContinue, AstBreak, AstWhile, AstFor],
+        state: CompileState,
+    ):
+        state.does_return[node] = False
+
+    def visit_AstExpr(self, node: AstExpr, state: CompileState):
+        # expressions do not return
+        state.does_return[node] = False
+
+    def visit_default(self, node, state):
+        assert not is_instance_compat(node, AstStmt)
+
+
+class CheckFunctionReturns(Visitor):
+    def visit_AstDef(self, node: AstDef, state: CompileState):
+        if node.return_type is None:
+            # don't need to return explicitly
+            return
+        CheckAllBranchesReturn().run(node.body, state)
+        if not state.does_return[node.body]:
+            state.err(f"Function '{node.name.var}' does not always return a value", node)
+            return
 
 
 class CheckConstArrayAccesses(Visitor):

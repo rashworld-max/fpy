@@ -126,11 +126,14 @@ from fpy.syntax import (
     AstWhile,
 )
 
-
-class GenerateFunctions(Visitor):
+class GenerateFunctionEntryPoints(Visitor):
     def visit_AstDef(self, node: AstDef, state: CompileState):
         entry_label = IrLabel(node, "entry")
         state.func_entry_labels[node] = entry_label
+
+class GenerateFunctions(Visitor):
+    def visit_AstDef(self, node: AstDef, state: CompileState):
+        entry_label = state.func_entry_labels[node]
         code = [entry_label]
         code.extend(GenerateFunctionBody().emit(node.body, state))
         state.generated_funcs[node] = code

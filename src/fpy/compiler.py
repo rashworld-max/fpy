@@ -18,6 +18,7 @@ from lark import Lark
 from fprime_gds.common.fpy.bytecode.directives import Directive
 from fpy.codegen import (
     FinalChecks,
+    GenerateFunctionEntryPoints,
     GenerateFunctions,
     GenerateModule,
     IrPass,
@@ -30,13 +31,14 @@ from fpy.semantics import (
     CalculateConstExprValues,
     CheckBreakAndContinueInLoop,
     CheckConstArrayAccesses,
+    CheckFunctionReturns,
     CheckReturnInFunc,
     CheckUseBeforeDeclare,
     CheckUseBeforeDeclareForLoopVariables,
-    CreateFunctions,
     CreateVariables,
     PickTypesAndResolveAttrsAndItems,
     ResolveNameRoots,
+    CheckFunctionsAccessConstExprsFromOutsideScope,
     ResolveTypesAndFuncs,
     WarnRangesAreNotEmpty,
 )
@@ -202,7 +204,6 @@ def ast_to_directives(
         # based on position of node in tree, figure out which scope it is in
         AssignLocalScopes(),
         # based on assignment syntax nodes, we know which variables exist where
-        CreateFunctions(),
         CreateVariables(),
         # check that break/continue are in loops, and store which loop they're in
         CheckBreakAndContinueInLoop(),
@@ -222,6 +223,8 @@ def ast_to_directives(
         # okay, now that we're sure we're passing in all the right args to each func,
         # we can calculate values of type ctors etc etc
         CalculateConstExprValues(),
+        CheckFunctionsAccessConstExprsFromOutsideScope(),
+        CheckFunctionReturns(),
         CheckConstArrayAccesses(),
         WarnRangesAreNotEmpty()
     ]
@@ -230,6 +233,7 @@ def ast_to_directives(
         DesugarForLoops(),
     ]
     codegen_passes = [
+        GenerateFunctionEntryPoints(),
         # generate all function bodies
         GenerateFunctions()
     ]
@@ -253,7 +257,6 @@ def ast_to_directives(
             return state.errors[0]
 
     ir = module_generator.emit(body, state)
-    print("\n".join(str(i) for i in ir))
     
     for compile_pass in ir_passes:
         ir = compile_pass.run(ir, state)

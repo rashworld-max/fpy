@@ -490,8 +490,6 @@ class CompileState:
     """map of node to the FpyScope it should resolve names in"""
     for_loops: dict[AstFor, ForLoopAnalysis] = field(default_factory=dict)
     """map of for loops to a ForLoopAnalysis struct, which contains additional info about the loops"""
-    func_defs: dict[AstDef, FuncDefAnalysis] = field(default_factory=dict)
-    """map of function definition nodes to a FuncDefAnalysis struct, which contains additional info about the func def"""
     enclosing_loops: dict[Union[AstBreak, AstContinue], Union[AstFor, AstWhile]] = (
         field(default_factory=dict)
     )
@@ -532,6 +530,8 @@ class CompileState:
     # store keys as while because for loops are desugared to while
     for_loop_inc_labels: dict[AstWhile, IrLabel] = field(default_factory=dict)
     """for loop node (desugared into a while) mapped to a label pointing to its increment stmt"""
+
+    does_return: dict[Ast, bool] = field(default_factory=dict)
 
     func_entry_labels: dict[AstDef, IrLabel] = field(default_factory=dict)
     """function to entry point label"""

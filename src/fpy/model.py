@@ -183,7 +183,7 @@ class FpySequencerModel:
         self.tlm_db = tlm
         if debug:
             # begin the sequence at dir 0
-            print("stack", len(self.stack))
+            print("stack", len(self.stack), "frame", self.stack_frame_start)
             for byte in range(0, len(self.stack)):
 
                 print(
@@ -191,6 +191,7 @@ class FpySequencerModel:
                     end=" ",
                 )
             print()
+        ctr = 0
         while self.next_dir_idx < len(self.dirs):
             next_dir = self.dirs[self.next_dir_idx]
             if debug:
@@ -200,7 +201,7 @@ class FpySequencerModel:
             if result != DirectiveErrorCode.NO_ERROR:
                 return result
             if debug:
-                print("stack", len(self.stack))
+                print("stack", len(self.stack), "frame", self.stack_frame_start)
                 for byte in range(0, len(self.stack)):
 
                     print(
@@ -208,6 +209,8 @@ class FpySequencerModel:
                         end=" ",
                     )
                 print()
+            if (ctr := ctr + 1) == 50:
+                break
         return DirectiveErrorCode.NO_ERROR
 
     def get_int_fmt_str(self, size: int, signed: bool) -> str:
@@ -251,6 +254,8 @@ class FpySequencerModel:
     def pop(self, type=int, signed=True, size=8) -> int | float | bytearray:
         """pops one word off the stack and interprets it as an int or float, of
         the specified signedness (if applicable) and bit width (if applicable)"""
+        if size == 0:
+            return
         value = self.stack[-size:]
         self.stack = self.stack[:-size]
         if type == int:

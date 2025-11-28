@@ -2690,11 +2690,21 @@ for i in 0..2:
     assert_compile_failure(fprime_test_api, seq)
 
 
-def test_use_global_ctx_in_func(fprime_test_api):
+def test_get_outside_var_in_func(fprime_test_api):
     seq = """
 i: U8 = 0
 def test():
     assert i == 0
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_get_outside_struct_member_in_func(fprime_test_api):
+    seq = """
+var: Svc.DpRecord = Svc.DpRecord(0, 1, 2, 3, 4, 5, Fw.DpState.UNTRANSMITTED)
+def test():
+    assert var.priority == 3
 """
 
     assert_compile_failure(fprime_test_api, seq)
@@ -2833,3 +2843,65 @@ assert fib(4) == 5
 """
 
     assert_run_success(fprime_test_api, seq)
+
+
+def test_var_in_func(fprime_test_api):
+    seq = """
+def test():
+    var: U32 = 123
+    assert var == 123
+
+test()
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+def test_missing_return(fprime_test_api):
+    seq = """
+def test() -> U32:
+    pass
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_if_elif_return(fprime_test_api):
+    seq = """
+def test() -> U32:
+    if True:
+        return 1
+    elif False:
+        return 3
+    else:
+        return 2
+    
+
+
+assert test() == 1
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_if_elif_return_missing(fprime_test_api):
+    seq = """
+def test() -> U32:
+    if True:
+        return 1
+    elif False:
+        pass
+    else:
+        return 2
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_return_in_for(fprime_test_api):
+    seq = """
+def test() -> U32:
+    for i in 0..0: # this fails because we can't guarantee that the loop body executes
+        return 0
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
