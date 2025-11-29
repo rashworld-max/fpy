@@ -255,7 +255,9 @@ NothingType = type[NothingValue]
 class FpyCallable:
     name: str
     return_type: FppType | NothingType
-    args: list[tuple[str, FppType]]
+    # args is a list of (name, type, default_value) tuples
+    # default_value is an AstExpr or None if no default is provided
+    args: list[tuple[str, FppType, "AstExpr | None"]]
 
 
 @dataclass

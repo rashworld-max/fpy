@@ -22,7 +22,8 @@ return_stmt: "return" [expr]
 
 assign: expr [":" expr] "=" expr
 
-parameters: var ":" expr ("," var ":" expr)*
+parameter: var ":" expr ["=" expr]
+parameters: parameter ("," parameter)*
 def_stmt: "def" var "(" [parameters] ")" ["->" expr] ":" scoped_body
 
 # loops

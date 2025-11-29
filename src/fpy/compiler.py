@@ -24,7 +24,7 @@ from fpy.codegen import (
     IrPass,
     ResolveLabels,
 )
-from fpy.desugaring import DesugarForLoops
+from fpy.desugaring import DesugarDefaultArgs, DesugarForLoops
 from fpy.semantics import (
     AssignIds,
     AssignLocalScopes,
@@ -141,7 +141,7 @@ def get_base_compile_state(dictionary: str, compile_args: dict) -> CompileState:
         cmd: CmdTemplate
         args = []
         for arg_name, _, arg_type in cmd.arguments:
-            args.append((arg_name, arg_type))
+            args.append((arg_name, arg_type, None))  # No default values for cmds
         # cmds are thought of as callables with a Fw.CmdResponse return value
         callable_name_dict[name] = FpyCmd(
             cmd.get_full_name(), cmd_response_type, args, cmd
@@ -150,7 +150,7 @@ def get_base_compile_state(dictionary: str, compile_args: dict) -> CompileState:
     # add numeric type casts to callable dict
     for typ in SPECIFIC_NUMERIC_TYPES:
         callable_name_dict[typ.get_canonical_name()] = FpyCast(
-            typ.get_canonical_name(), typ, [("value", NumericalValue)], typ
+            typ.get_canonical_name(), typ, [("value", NumericalValue, None)], typ
         )
 
     # for each type in the dict, if it has a constructor, create an FpyTypeCtor
@@ -159,15 +159,15 @@ def get_base_compile_state(dictionary: str, compile_args: dict) -> CompileState:
         args = []
         if issubclass(typ, StructValue):
             for arg_name, arg_type, _, _ in typ.MEMBER_LIST:
-                args.append((arg_name, arg_type))
+                args.append((arg_name, arg_type, None))  # No default values for struct ctors
         elif issubclass(typ, ArrayValue):
             for i in range(0, typ.LENGTH):
-                args.append(("e" + str(i), typ.MEMBER_TYPE))
+                args.append(("e" + str(i), typ.MEMBER_TYPE, None))
         elif issubclass(typ, TimeValue):
-            args.append(("time_base", U16Value))
-            args.append(("time_context", U8Value))
-            args.append(("seconds", U32Value))
-            args.append(("useconds", U32Value))
+            args.append(("time_base", U16Value, None))
+            args.append(("time_context", U8Value, None))
+            args.append(("seconds", U32Value, None))
+            args.append(("useconds", U32Value, None))
         else:
             # bool, enum, string or numeric type
             # none of these have callable ctors
@@ -229,6 +229,8 @@ def ast_to_directives(
         WarnRangesAreNotEmpty()
     ]
     desugaring_passes: list[Visitor] = [
+        # Fill in default arguments before desugaring for loops
+        DesugarDefaultArgs(),
         # now that semantic analysis is done, we can desugar things. start with for loops
         DesugarForLoops(),
     ]

@@ -2982,6 +2982,7 @@ assert F64(narrow) == 16777216.0
 
     assert_run_success(fprime_test_api, rounding_seq)
 
+def test_const_float_overflow(fprime_test_api):
     overflow_seq = """
 narrow: F32 = 3.5e38
 """
@@ -3023,7 +3024,6 @@ def noop():
     pass
 
 noop()
-exit(0)
 """
 
     assert_run_success(fprime_test_api, seq)
@@ -3038,3 +3038,246 @@ assert echo(5) == 5
 """
 
     assert_run_success(fprime_test_api, seq)
+
+
+def test_default_arg_simple(fprime_test_api):
+    seq = """
+def test(a: U64, b: U64 = 5) -> U64:
+    return a + b
+
+assert test(1) == 6
+assert test(1, 2) == 3
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_default_arg_before_non_default(fprime_test_api):
+    seq = """
+def test(a: U64 = 5, b: U64):
+    pass
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_default_arg_multiple(fprime_test_api):
+    seq = """
+def test(a: U64, b: U64 = 2, c: U64 = 3) -> U64:
+    return a + b + c
+
+assert test(1) == 6
+assert test(1, 5) == 9
+assert test(1, 5, 10) == 16
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_default_arg_too_few_args(fprime_test_api):
+    seq = """
+def test(a: U64, b: U64 = 5) -> U64:
+    return a + b
+
+test()
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_default_arg_too_many_args(fprime_test_api):
+    seq = """
+def test(a: U64, b: U64 = 5) -> U64:
+    return a + b
+
+test(1, 2, 3)
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_default_arg_all_defaults(fprime_test_api):
+    seq = """
+def test(a: U64 = 1, b: U64 = 2) -> U64:
+    return a + b
+
+assert test() == 3
+assert test(10) == 12
+assert test(10, 20) == 30
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_default_arg_float_coercion(fprime_test_api):
+    """Float literal coercion for default value."""
+    seq = """
+def test(x: F64 = 2.5) -> F64:
+    return x + 1.0
+
+# 2.5 is an arbitrary precision Float literal that gets coerced to F64
+assert test() == 3.5
+assert test(10.0) == 11.0
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_default_arg_expression(fprime_test_api):
+    """Default value can be an expression."""
+    seq = """
+def test(a: U64 = 2 + 3) -> U64:
+    return a
+
+assert test() == 5
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_default_arg_incompatible_type(fprime_test_api):
+    """Default value type must be compatible with parameter type."""
+    seq = """
+def test(a: U64 = -5) -> U64:
+    return a
+"""
+
+    # Should fail because -5 can't be assigned to U64
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_default_arg_wrong_type(fprime_test_api):
+    """Default value type must be assignable to parameter type."""
+    seq = """
+def test(a: bool = 5) -> bool:
+    return a
+"""
+
+    # Should fail because int literal is not a bool
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_default_arg_with_cast(fprime_test_api):
+    """Default value can be a cast expression."""
+    seq = """
+def test(a: U8 = U8(255)) -> U8:
+    return a
+
+assert test() == 255
+assert test(U8(10)) == 10
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_default_arg_with_narrowing_cast(fprime_test_api):
+    """Default value can be a narrowing cast expression."""
+    seq = """
+def test(a: U8 = U8(1000)) -> U8:
+    return a
+
+# 1000 truncated to U8 is 232 (1000 & 0xFF)
+assert test() == 232
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_default_arg_with_tlm(fprime_test_api):
+    """Default value can be a runtime value like telemetry - evaluated at call site."""
+    seq = """
+CdhCore.cmdDisp.CMD_NO_OP()
+
+def test(a: U32 = CdhCore.cmdDisp.CommandsDispatched) -> U32:
+    return a
+
+# Default gets evaluated at call time, not definition time
+# So this should get the current telemetry value
+assert test() >= 1
+"""
+
+    assert_run_success(
+        fprime_test_api,
+        seq,
+        {"CdhCore.cmdDisp.CommandsDispatched": U32Value(1).serialize()},
+    )
+
+
+def test_default_arg_with_function_call(fprime_test_api):
+    """Default value can be a function call - evaluated at call site."""
+    seq = """
+def helper() -> U64:
+    return 42
+
+def test(a: U64 = helper()) -> U64:
+    return a
+
+# Function call default is evaluated each time test() is called without args
+assert test() == 42
+assert test(100) == 100
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_default_arg_with_variable(fprime_test_api):
+    """Default value can reference a variable - evaluated at call site."""
+    seq = """
+x: U64 = 10
+
+def test(a: U64 = x) -> U64:
+    return a
+
+assert test() == 10
+x = 20
+# Since default is evaluated at call site, it uses current value of x
+assert test() == 20
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_default_arg_nested_func_can_access_outer_local(fprime_test_api):
+    """Default value in nested function can access outer function's local variables.
+    
+    This is safe because nested functions can only be called from within their
+    defining scope, so the outer local will always be on the stack when the
+    default is evaluated.
+    """
+    seq = """
+def outer() -> U64:
+    x: U64 = 10
+    
+    def inner(a: U64 = x) -> U64:
+        return a
+    
+    return inner()
+
+assert outer() == 10
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_default_arg_forward_reference(fprime_test_api):
+    """Default value cannot reference a variable declared after the function."""
+    seq = """
+def test(a: U64 = x) -> U64:
+    return a
+
+x: U64 = 10
+"""
+
+    # Should fail: "'x' used before declared"
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_default_arg_undefined_variable(fprime_test_api):
+    """Default value cannot reference an undefined variable."""
+    seq = """
+def test(a: U64 = undefined_var) -> U64:
+    return a
+"""
+
+    # Should fail: "Unknown value"
+    assert_compile_failure(fprime_test_api, seq)

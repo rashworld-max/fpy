@@ -144,12 +144,32 @@ class AssignLocalScopes(TopDownVisitor):
 
     def visit_AstDef(self, node: AstDef, state: CompileState):
         parent_scope = state.local_scopes[node]
-        # make a new scope
+        # make a new scope for the function body
         scope = FpyScope()
         state.scope_parents[scope] = parent_scope
-        SetLocalScope(scope).run(node, state)
-        # the node itself
+
+        # The function body gets the new scope
+        SetLocalScope(scope).run(node.body, state)
+
+        # Parameter names and type annotations are in the body scope
+        # (they're declared inside the function)
+        if node.parameters is not None:
+            for arg_name_var, arg_type_expr, default_value in node.parameters:
+                state.local_scopes[arg_name_var] = scope
+                state.local_scopes[arg_type_expr] = scope
+                # Default values stay in parent scope - they're evaluated at call site,
+                # not inside the function body
+                if default_value is not None:
+                    SetLocalScope(parent_scope).run(default_value, state)
+
+        # Return type annotation is in parent scope (it references types visible at def site)
+        if node.return_type is not None:
+            state.local_scopes[node.return_type] = parent_scope
+
+        # The def node itself is in the parent scope
         state.local_scopes[node] = parent_scope
+        # Function name is in parent scope
+        state.local_scopes[node.name] = parent_scope
 
 
 class CreateVariables(TopDownVisitor):
@@ -265,8 +285,22 @@ class CreateVariables(TopDownVisitor):
             # no arguments
             return
 
+        # Check that default arguments come after non-default arguments
+        seen_default = False
         for arg in node.parameters:
-            arg_name_var, arg_type_expr = arg
+            arg_name_var, arg_type_expr, default_value = arg
+            if default_value is not None:
+                seen_default = True
+            elif seen_default:
+                # Non-default argument after default argument
+                state.err(
+                    f"Non-default argument '{arg_name_var.var}' follows default argument",
+                    arg_name_var,
+                )
+                return
+
+        for arg in node.parameters:
+            arg_name_var, arg_type_expr, default_value = arg
             existing_local = state.local_scopes[node.body].get(arg_name_var.var)
             if existing_local is not None:
                 # redeclaring an existing variable
@@ -521,7 +555,7 @@ class ResolveNameRoots(TopDownVisitor):
                 return
 
         if node.parameters is not None:
-            for arg_name_var, arg_type_expr in node.parameters:
+            for arg_name_var, arg_type_expr, default_value in node.parameters:
                 if not self.try_resolve_root_ref(
                     arg_name_var, state.runtime_values, "value", state
                 ):
@@ -535,6 +569,13 @@ class ResolveNameRoots(TopDownVisitor):
                     search_local_scope=False,
                 ):
                     return
+
+                # Resolve default value if present
+                if default_value is not None:
+                    if not self.try_resolve_root_ref(
+                        default_value, state.runtime_values, "value", state
+                    ):
+                        return
 
     def visit_AstReturn(self, node: AstReturn, state: CompileState):
         if not self.try_resolve_root_ref(
@@ -645,7 +686,7 @@ class ResolveTypesAndFuncs(TopDownVisitor):
             # to frame ptr
             # start out at -8 bytes because that's where the fp/ip will go
             offset = -StackSizeType.getMaxSize() * 2
-            for arg_name_var, arg_type_expr in reversed(node.parameters):
+            for arg_name_var, arg_type_expr, default_value in reversed(node.parameters):
                 # don't need to do arg_name because it's a var, already done
                 arg_var = state.resolved_references[arg_name_var]
 
@@ -662,7 +703,7 @@ class ResolveTypesAndFuncs(TopDownVisitor):
                 assert is_instance_compat(arg_type, type), arg_type
                 # okay now we know the type of the arg, we can go update it in the
                 # arg var struct
-                args.append((arg_name_var.var, arg_type))
+                args.append((arg_name_var.var, arg_type, default_value))
                 arg_var.type = arg_type
 
             # unreverse the args
@@ -1202,14 +1243,18 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
         where any numeric type is accepted.
         returns a compile error if no match, otherwise none"""
         func_args = func.args
-        if len(node_args) < len(func_args):
+        
+        # Count required args (those without defaults)
+        required_args = sum(1 for arg in func_args if len(arg) < 3 or arg[2] is None)
+        
+        if len(node_args) < required_args:
             return CompileError(
-                f"Missing arguments (expected {len(func_args)} found {len(node_args)})",
+                f"Missing arguments (expected at least {required_args}, found {len(node_args)})",
                 node,
             )
         if len(node_args) > len(func_args):
             return CompileError(
-                f"Too many arguments (expected {len(func_args)} found {len(node_args)})",
+                f"Too many arguments (expected at most {len(func_args)}, found {len(node_args)})",
                 node,
             )
         if is_instance_compat(func, FpyCast):
@@ -1228,8 +1273,10 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
             # no error! looks good to me
             return
 
+        # Check provided args against expected
         for value_expr, arg in zip(node_args, func_args):
-            arg_name, arg_type = arg
+            arg_name = arg[0]
+            arg_type = arg[1]
 
             unconverted_type = state.expr_unconverted_types[value_expr]
             if not self.can_coerce_type(unconverted_type, arg_type):
@@ -1272,7 +1319,8 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
             state.expr_explicit_casts.append(node_arg)
         else:
             for value_expr, arg in zip(node_args, func.args):
-                arg_name, arg_type = arg
+                arg_name = arg[0]
+                arg_type = arg[1]
 
                 # should be good 2 go based on the check func above
                 state.expr_converted_types[value_expr] = arg_type
@@ -1338,9 +1386,21 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
             return
 
     def visit_AstDef(self, node: AstDef, state: CompileState):
-        # nothing to do for func def. yes it has exprs but those exprs
-        # are just types which we don't care about the value of
-        pass
+        # Validate that default argument types are compatible with parameter types
+        if node.parameters is None:
+            return
+        
+        func = state.resolved_references[node.name]
+        if not is_instance_compat(func, FpyFunction):
+            return
+        
+        for (arg_name_var, arg_type_expr, default_value), (_, arg_type, _) in zip(
+            node.parameters, func.args
+        ):
+            if default_value is not None:
+                # Check that default value's type can be coerced to parameter type
+                if not self.coerce_expr_type(default_value, arg_type, state):
+                    return
 
     def visit_AstReturn(self, node: AstReturn, state: CompileState):
         func = state.enclosing_funcs[node]
@@ -1378,8 +1438,8 @@ class CalculateConstExprValues(Visitor):
 
         return struct.unpack(fmt, packed)[0]
 
+    @staticmethod
     def const_convert_type(
-        self,
         from_val: FppValue,
         to_type: FppType,
         node: Ast,
@@ -1416,7 +1476,7 @@ class CalculateConstExprValues(Visitor):
                     )
                     return None
 
-                rounded_value = self._round_float_to_type(coerced_value, to_type)
+                rounded_value = CalculateConstExprValues._round_float_to_type(coerced_value, to_type)
                 if rounded_value is None:
                     state.err(
                         f"{from_val} is out of range for type {typename(to_type)}",

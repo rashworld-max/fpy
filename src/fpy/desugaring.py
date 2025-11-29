@@ -4,7 +4,9 @@ from fpy.syntax import (
     Ast,
     AstAssign,
     AstBinaryOp,
+    AstExpr,
     AstFor,
+    AstFuncCall,
     AstNumber,
     AstRange,
     AstVar,
@@ -14,9 +16,11 @@ from fpy.types import (
     CompileState,
     ForLoopAnalysis,
     FppType,
+    FpyFunction,
     FpyReference,
     FpyIntegerValue,
     Transformer,
+    is_instance_compat,
 )
 from fprime.common.models.serialize.type_base import BaseType as FppValue
 from fprime.common.models.serialize.bool_type import BoolType as BoolValue
@@ -278,3 +282,62 @@ class DesugarForLoops(Transformer):
 
         # turn one node into three
         return [initialize_loop_var, declare_upper_bound_var, while_loop]
+
+
+class DesugarDefaultArgs(Transformer):
+    """
+    Desugars function calls with missing arguments by filling in default values.
+    
+    For example, if we have:
+        def foo(a: U8, b: U8 = 5):
+            pass
+        foo(1)
+    
+    This becomes:
+        foo(1, 5)
+    
+    Note: The type coercion for default values is handled during semantic analysis
+    in PickTypesAndResolveAttrsAndItems.visit_AstDef. By the time this desugaring
+    runs, expr_converted_types already has the correct coerced types for default
+    value expressions.
+    """
+
+    def visit_AstFuncCall(self, node: AstFuncCall, state: CompileState):
+        func = state.resolved_references.get(node.func)
+        
+        if not is_instance_compat(func, FpyFunction):
+            # Not a user-defined function, don't desugar
+            return node
+        
+        func_args = func.args
+        if func_args is None:
+            return node
+        
+        node_args = node.args if node.args else []
+        
+        # Check if we need to fill in defaults
+        if len(node_args) == len(func_args):
+            # All arguments provided, no defaults needed
+            return node
+        
+        # Fill in missing arguments with their default values
+        new_args = list(node_args)
+        
+        for i in range(len(node_args), len(func_args)):
+            arg_name, arg_type, default_value = func_args[i]
+            # Assert that default_value is not None because:
+            # 1. Semantic checks verify that non-default args come before default args
+            # 2. Semantic checks verify that if len(node_args) < len(func_args), all
+            #    remaining args must have defaults
+            # If this assertion fails, the semantic checker has a bug.
+            assert default_value is not None, (
+                f"Missing default value for argument '{arg_name}' at position {i}. "
+                f"This should have been caught by semantic analysis."
+            )
+            # Add the default value expression as an argument
+            new_args.append(default_value)
+        
+        # Update the node's args
+        node.args = new_args
+        
+        return node

@@ -140,7 +140,7 @@ class GenerateFunctions(Visitor):
         func = state.resolved_references[node.name]
         if func.return_type is NothingValue and not state.does_return[node.body]:
             arg_bytes = sum(
-                arg_type.getMaxSize() for _, arg_type in (func.args or [])
+                arg[1].getMaxSize() for arg in (func.args or [])
             )
             code.append(ReturnDirective(0, arg_bytes))
         state.generated_funcs[node] = code
@@ -491,7 +491,7 @@ class GenerateFunctionBody(Emitter):
     def emit_AstReturn(self, node: AstReturn, state: CompileState):
         enclosing_func = state.enclosing_funcs[node]
         enclosing_func = state.resolved_references[enclosing_func.name]
-        func_args_size = sum(arg_type.getMaxSize() for arg_name, arg_type in enclosing_func.args)
+        func_args_size = sum(arg[1].getMaxSize() for arg in enclosing_func.args)
 
         if node.value is not None:
             dirs = self.emit(node.value, state)

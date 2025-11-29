@@ -62,7 +62,7 @@ def generate_abs_float(node: Ast) -> list[Directive | Ir]:
     return dirs
 
 
-MACRO_ABS_FLOAT = FpyInlineBuiltin("abs", F64Value, [("value", F64Value)], generate_abs_float)
+MACRO_ABS_FLOAT = FpyInlineBuiltin("abs", F64Value, [("value", F64Value, None)], generate_abs_float)
 
 
 def generate_abs_signed_int(node: Ast) -> list[Directive | Ir]:
@@ -89,7 +89,7 @@ def generate_abs_signed_int(node: Ast) -> list[Directive | Ir]:
 
 
 MACRO_ABS_SIGNED_INT = FpyInlineBuiltin(
-    "abs", I64Value, [("value", I64Value)], generate_abs_signed_int
+    "abs", I64Value, [("value", I64Value, None)], generate_abs_signed_int
 )
 
 MACRO_SLEEP_SECONDS_USECONDS = FpyInlineBuiltin(
@@ -99,8 +99,9 @@ MACRO_SLEEP_SECONDS_USECONDS = FpyInlineBuiltin(
         (
             "seconds",
             U32Value,
+            None,
         ),
-        ("microseconds", U32Value),
+        ("microseconds", U32Value, None),
     ],
     lambda n: [WaitRelDirective()],
 )
@@ -140,7 +141,7 @@ def generate_sleep_float(node: Ast) -> list[Directive | Ir]:
 
 
 MACRO_SLEEP_FLOAT = FpyInlineBuiltin(
-    "sleep", NothingValue, [("seconds", F64Value)], generate_sleep_float
+    "sleep", NothingValue, [("seconds", F64Value, None)], generate_sleep_float
 )
 
 
@@ -157,14 +158,14 @@ MACROS: dict[str, FpyInlineBuiltin] = {
     "sleep_until": FpyInlineBuiltin(
         "sleep_until",
         NothingValue,
-        [("wakeup_time", TimeValue)],
+        [("wakeup_time", TimeValue, None)],
         lambda n: [WaitAbsDirective()],
     ),
     "exit": FpyInlineBuiltin(
-        "exit", NothingValue, [("exit_code", U8Value)], lambda n: [ExitDirective()]
+        "exit", NothingValue, [("exit_code", U8Value, None)], lambda n: [ExitDirective()]
     ),
     "log": FpyInlineBuiltin(
-        "log", F64Value, [("operand", F64Value)], lambda n: [FloatLogDirective()]
+        "log", F64Value, [("operand", F64Value, None)], lambda n: [FloatLogDirective()]
     ),
     "now": FpyInlineBuiltin("now", TimeValue, [], lambda n: [PushTimeDirective()]),
     "iabs": MACRO_ABS_SIGNED_INT,

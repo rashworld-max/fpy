@@ -231,7 +231,9 @@ class AstReturn(Ast):
 @dataclass
 class AstDef(Ast):
     name: AstVar
-    parameters: list[tuple[AstVar, AstExpr]]
+    # parameters is a list of (name, type, default_value) tuples
+    # default_value is None if no default is provided
+    parameters: list[tuple[AstVar, AstExpr, AstExpr | None]]
     return_type: Union[AstExpr, None]
     body: AstScopedBody
 
@@ -316,13 +318,12 @@ def handle_str(meta, s: str):
     return s.strip("'").strip('"')
 
 
-def handle_parameters(meta, args):
-    assert len(args) % 2 == 0, args
-    # pair up the arg name and arg type
-    pairs = []
-    for i in range(0, len(args), 2):
-        pairs.append((args[i], args[i + 1]))
-    return pairs
+def handle_parameter(meta, args):
+    """Parse a single parameter: (name, type, default_value or None)"""
+    assert len(args) in (2, 3), f"Expected 2 or 3 args, got {len(args)}: {args}"
+    name, type_expr = args[0], args[1]
+    default_value = args[2] if len(args) == 3 else None
+    return (name, type_expr, default_value)
 
 
 @v_args(meta=True, inline=True)
@@ -360,7 +361,8 @@ class FpyTransformer(Transformer):
     range = AstRange
 
     def_stmt = AstDef
-    parameters = no_inline(handle_parameters)
+    parameter = no_inline(handle_parameter)
+    parameters = no_inline_or_meta(list)  # Just convert to list
     return_stmt = AstReturn
 
     NAME = str
