@@ -77,7 +77,9 @@ _test: or_test
 ?power: atomexpr POW_OP factor -> binary_op
       | atomexpr
 
-arguments: expr ("," expr)*
+argument: name "=" expr -> named_argument
+        | expr -> positional_argument
+arguments: argument ("," argument)*
 
 ?atomexpr: atomexpr "(" [arguments] ")" -> func_call
           | atomexpr "[" expr "]" -> get_item

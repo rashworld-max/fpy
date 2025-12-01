@@ -91,6 +91,7 @@ from fpy.syntax import (
     AstFor,
     AstGetAttr,
     AstGetItem,
+    AstNamedArgument,
     AstNumber,
     AstPass,
     AstRange,
@@ -437,9 +438,15 @@ class ResolveNameRoots(TopDownVisitor):
             return
 
         for arg in node.args if node.args is not None else []:
-            # arg value refs must have values at runtime
-            if not self.try_resolve_root_ref(arg, state.runtime_values, "value", state):
-                return
+            # Handle both positional args (AstExpr) and named args (AstNamedArgument)
+            if is_instance_compat(arg, AstNamedArgument):
+                # For named arguments, resolve the value expression
+                if not self.try_resolve_root_ref(arg.value, state.runtime_values, "value", state):
+                    return
+            else:
+                # arg value refs must have values at runtime
+                if not self.try_resolve_root_ref(arg, state.runtime_values, "value", state):
+                    return
 
     def visit_AstIf_AstElif(self, node: Union[AstIf, AstElif], state: CompileState):
         # if condition expr refs must be "runtime values" (tlm/prm/const/etc)
@@ -1231,36 +1238,97 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
         state.expr_unconverted_types[node] = BoolValue
         state.expr_converted_types[node] = BoolValue
 
+    def resolve_named_args(
+        self,
+        node: AstFuncCall,
+        func: FpyCallable,
+        node_args: list,
+        state: CompileState,
+    ) -> list[AstExpr] | CompileError:
+        """Resolve named arguments to positional order.
+        
+        Returns a list of argument expressions in positional order, filling in
+        None for arguments that were not provided (will be filled with defaults later).
+        Returns a CompileError if there's an issue with the arguments.
+        """
+        func_args = func.args
+        
+        # Build a map of parameter name to index
+        param_name_to_idx = {arg[0]: i for i, arg in enumerate(func_args)}
+        
+        # Track which arguments have been assigned
+        assigned_args: list[AstExpr | None] = [None] * len(func_args)
+        seen_named = False
+        positional_count = 0
+        
+        for arg in node_args:
+            if is_instance_compat(arg, AstNamedArgument):
+                seen_named = True
+                # Check if the name is valid
+                if arg.name not in param_name_to_idx:
+                    return CompileError(
+                        f"Unknown argument name '{arg.name}'",
+                        arg,
+                    )
+                idx = param_name_to_idx[arg.name]
+                # Check if the argument was already assigned
+                if assigned_args[idx] is not None:
+                    return CompileError(
+                        f"Argument '{arg.name}' specified multiple times",
+                        arg,
+                    )
+                assigned_args[idx] = arg.value
+            else:
+                # Positional argument
+                if seen_named:
+                    return CompileError(
+                        "Positional argument cannot follow named argument",
+                        arg,
+                    )
+                if positional_count >= len(func_args):
+                    return CompileError(
+                        f"Too many arguments (expected at most {len(func_args)})",
+                        node,
+                    )
+                # Check if already assigned (shouldn't happen for positional-only case)
+                if assigned_args[positional_count] is not None:
+                    # This would happen if named arg came before positional
+                    return CompileError(
+                        f"Argument '{func_args[positional_count][0]}' specified multiple times",
+                        arg,
+                    )
+                assigned_args[positional_count] = arg
+                positional_count += 1
+        
+        return assigned_args
+
     def check_args_coercible_to_func(
         self,
         node: AstFuncCall,
         func: FpyCallable,
-        node_args: list[AstExpr],
+        resolved_args: list[AstExpr | None],
         state: CompileState,
     ) -> CompileError | None:
         """check if a function call matches the expected arguments.
         given args must be coercible to expected args, with a special case for casting
         where any numeric type is accepted.
+        resolved_args should be in positional order, with None for missing args.
         returns a compile error if no match, otherwise none"""
         func_args = func.args
         
-        # Count required args (those without defaults)
-        required_args = sum(1 for arg in func_args if len(arg) < 3 or arg[2] is None)
+        # Check that all required args (those without defaults) are provided
+        for i, arg in enumerate(func_args):
+            has_default = arg[2] is not None
+            if not has_default and resolved_args[i] is None:
+                return CompileError(
+                    f"Missing required argument '{arg[0]}'",
+                    node,
+                )
         
-        if len(node_args) < required_args:
-            return CompileError(
-                f"Missing arguments (expected at least {required_args}, found {len(node_args)})",
-                node,
-            )
-        if len(node_args) > len(func_args):
-            return CompileError(
-                f"Too many arguments (expected at most {len(func_args)}, found {len(node_args)})",
-                node,
-            )
         if is_instance_compat(func, FpyCast):
             # casts do not follow coercion rules, because casting is the counterpart of coercion!
             # coercion is implicit, casting is explicit. if they say they want to cast, we let them
-            node_arg = node_args[0]
+            node_arg = resolved_args[0]
             input_type = state.expr_unconverted_types[node_arg]
             output_type = func.to_type
             # right now we only have casting to numbers
@@ -1274,7 +1342,11 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
             return
 
         # Check provided args against expected
-        for value_expr, arg in zip(node_args, func_args):
+        for i, (value_expr, arg) in enumerate(zip(resolved_args, func_args)):
+            if value_expr is None:
+                # This arg has a default value, will be filled in during desugaring
+                continue
+                
             arg_name = arg[0]
             arg_type = arg[1]
 
@@ -1282,7 +1354,7 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
             if not self.can_coerce_type(unconverted_type, arg_type):
                 return CompileError(
                     f"Expected {typename(arg_type)}, found {typename(unconverted_type)}",
-                    node,
+                    value_expr if is_instance_compat(value_expr, Ast) else node,
                 )
         # all args r good
         return
@@ -1296,8 +1368,17 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
             state.err(f"Unknown function", node.func)
             return
         node_args = node.args if node.args else []
+        
+        # Resolve named arguments to positional order
+        resolved_args = self.resolve_named_args(node, func, node_args, state)
+        if is_instance_compat(resolved_args, CompileError):
+            state.errors.append(resolved_args)
+            return
+        
+        # Store the resolved args for use in desugaring
+        state.resolved_func_args[node] = resolved_args
 
-        error_or_none = self.check_args_coercible_to_func(node, func, node_args, state)
+        error_or_none = self.check_args_coercible_to_func(node, func, resolved_args, state)
         if is_instance_compat(error_or_none, CompileError):
             state.errors.append(error_or_none)
             return
@@ -1308,7 +1389,7 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
 
         # go handle coercion/casting
         if is_instance_compat(func, FpyCast):
-            node_arg = node_args[0]
+            node_arg = resolved_args[0]
             output_type = func.to_type
             # we're going from input_type to output type, and we're going to ignore
             # the coercion rules
@@ -1318,7 +1399,11 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
             # we turn off the checks because the user is asking us to force this!
             state.expr_explicit_casts.append(node_arg)
         else:
-            for value_expr, arg in zip(node_args, func.args):
+            for value_expr, arg in zip(resolved_args, func.args):
+                if value_expr is None:
+                    # This arg has a default value, will be filled in during desugaring
+                    continue
+                    
                 arg_name = arg[0]
                 arg_type = arg[1]
 
@@ -1708,10 +1793,21 @@ class CalculateConstExprValues(Visitor):
     def visit_AstFuncCall(self, node: AstFuncCall, state: CompileState):
         func = state.resolved_references[node.func]
         assert is_instance_compat(func, FpyCallable)
+        
+        # Use resolved args from semantic analysis (already in positional order)
+        # This is guaranteed to be set by PickTypesAndResolveAttrsAndItems
+        resolved_args = state.resolved_func_args[node]
+        
+        # For const folding, we need all arguments to be provided and constant
+        # Check if any args are missing (None in resolved_args means not provided)
+        if any(arg is None for arg in resolved_args):
+            state.expr_converted_values[node] = None
+            return
+        
         # gather arg values
         arg_values = [
             state.expr_converted_values[e]
-            for e in (node.args if node.args is not None else [])
+            for e in resolved_args
         ]
         unknown_value = any(v is None for v in arg_values)
         if unknown_value:

@@ -3274,3 +3274,254 @@ def test(a: U64 = undefined_var) -> U64:
 
     # Should fail: "Unknown value"
     assert_compile_failure(fprime_test_api, seq)
+
+
+# Named arguments tests
+
+def test_named_arg_simple(fprime_test_api):
+    """Basic named argument usage."""
+    seq = """
+def test(a: U64, b: U64) -> U64:
+    return a + b
+
+assert test(a=1, b=2) == 3
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_named_arg_reorder(fprime_test_api):
+    """Named arguments can be in any order."""
+    seq = """
+def test(a: U64, b: U64, c: U64) -> U64:
+    return a * 100 + b * 10 + c
+
+assert test(c=3, a=1, b=2) == 123
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_named_arg_mixed_positional(fprime_test_api):
+    """Positional args followed by named args."""
+    seq = """
+def test(a: U64, b: U64, c: U64) -> U64:
+    return a * 100 + b * 10 + c
+
+assert test(1, c=3, b=2) == 123
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_named_arg_with_defaults(fprime_test_api):
+    """Named arguments with default values."""
+    seq = """
+def test(a: U64, b: U64 = 5, c: U64 = 10) -> U64:
+    return a + b + c
+
+# Only provide first and last, middle uses default
+assert test(a=1, c=20) == 26
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_named_arg_all_with_defaults(fprime_test_api):
+    """Named arguments for all parameters, some with defaults."""
+    seq = """
+def test(a: U64 = 1, b: U64 = 2, c: U64 = 3) -> U64:
+    return a * 100 + b * 10 + c
+
+# Override middle one only
+assert test(b=5) == 153
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_named_arg_unknown_name(fprime_test_api):
+    """Error when using unknown argument name."""
+    seq = """
+def test(a: U64, b: U64) -> U64:
+    return a + b
+
+test(a=1, c=2)
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_named_arg_duplicate(fprime_test_api):
+    """Error when same argument specified twice."""
+    seq = """
+def test(a: U64, b: U64) -> U64:
+    return a + b
+
+test(a=1, a=2)
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_named_arg_positional_and_named(fprime_test_api):
+    """Error when same argument specified positionally and by name."""
+    seq = """
+def test(a: U64, b: U64) -> U64:
+    return a + b
+
+test(1, a=2)
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_named_arg_positional_after_named(fprime_test_api):
+    """Error when positional argument follows named argument."""
+    seq = """
+def test(a: U64, b: U64, c: U64) -> U64:
+    return a + b + c
+
+test(a=1, 2, 3)
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_named_arg_missing_required(fprime_test_api):
+    """Error when required argument is missing."""
+    seq = """
+def test(a: U64, b: U64, c: U64) -> U64:
+    return a + b + c
+
+test(a=1, c=3)
+"""
+
+    assert_compile_failure(fprime_test_api, seq)
+
+
+def test_named_arg_cmd_call(fprime_test_api):
+    """Named arguments work with command calls."""
+    seq = """
+CdhCore.cmdDisp.CMD_TEST_CMD_1(arg1=1, arg2=1.0, arg3=1)
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_named_arg_cmd_call_reorder(fprime_test_api):
+    """Named arguments can reorder command arguments."""
+    seq = """
+CdhCore.cmdDisp.CMD_TEST_CMD_1(arg3=1, arg1=1, arg2=1.0)
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_named_arg_type_ctor(fprime_test_api):
+    """Named arguments work with type constructors."""
+    seq = """
+time: Fw.Time = Fw.Time(seconds=123, useconds=456, time_base=0, time_context=0)
+assert time.seconds == 123
+assert time.useconds == 456
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_named_arg_struct_ctor(fprime_test_api):
+    """Named arguments work with struct constructors."""
+    seq = """
+pair: Ref.ChoicePair = Ref.ChoicePair(secondChoice=Ref.Choice.TWO, firstChoice=Ref.Choice.ONE)
+assert pair.firstChoice == Ref.Choice.ONE
+assert pair.secondChoice == Ref.Choice.TWO
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_named_arg_builtin(fprime_test_api):
+    """Named arguments work with builtin functions."""
+    seq = """
+sleep(microseconds=1000, seconds=1)
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_named_arg_builtin_single(fprime_test_api):
+    """Named arguments work with single-arg builtins."""
+    seq = """
+exit(exit_code=0)
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_named_arg_cast(fprime_test_api):
+    """Named arguments work with type casts."""
+    seq = """
+val: F64 = 3.14
+result: U32 = U32(value=val)
+assert result == 3
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_named_arg_coercion_int_to_float(fprime_test_api):
+    """Named arguments correctly coerce int to float."""
+    seq = """
+def test(x: F64) -> F64:
+    return x + 0.5
+
+# U32 should be coerced to F64
+val: U32 = 10
+assert test(x=val) == 10.5
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_named_arg_coercion_narrow_to_wide(fprime_test_api):
+    """Named arguments correctly coerce narrow int to wider int."""
+    seq = """
+def test(x: U64) -> U64:
+    return x + 1
+
+small: U8 = 100
+# U8 should be coerced to U64
+assert test(x=small) == 101
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_named_arg_coercion_in_cmd(fprime_test_api):
+    """Named arguments with coercion in command calls."""
+    seq = """
+# arg1 is I32, arg2 is F32, arg3 is U8
+# Test coercion from narrower to wider types
+val1: I16 = 1  # I16 -> I32
+val2: I16 = 2  # I16 -> F32
+val3: U8 = 3   # U8 -> U8 (exact match)
+CdhCore.cmdDisp.CMD_TEST_CMD_1(arg1=val1, arg2=val2, arg3=val3)
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_named_arg_coercion_reordered(fprime_test_api):
+    """Named arguments maintain correct coercion when reordered."""
+    seq = """
+def test(a: U64, b: F64, c: I32) -> F64:
+    return b + F64(a) + F64(c)
+
+# Pass in different order with finite bitwidth types
+x: I8 = -5
+y: U32 = 10
+z: F32 = 0.5
+assert test(c=x, a=y, b=z) == 5.5
+"""
+
+    assert_run_success(fprime_test_api, seq)

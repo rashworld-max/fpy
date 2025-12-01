@@ -525,6 +525,12 @@ class CompileState:
     """expr to the fprime value it will end up being on the stack after type conversions.
     None if unsure at compile time"""
 
+    resolved_func_args: dict[AstFuncCall, list[AstExpr | None]] = field(
+        default_factory=dict
+    )
+    """function call to resolved arguments in positional order.
+    None entries are for arguments that will be filled with defaults."""
+
     while_loop_end_labels: dict[AstWhile, IrLabel] = field(default_factory=dict)
     """while loop node mapped to the label pointing to the end of the loop"""
     while_loop_start_labels: dict[AstWhile, IrLabel] = field(default_factory=dict)

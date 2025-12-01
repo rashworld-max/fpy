@@ -132,9 +132,16 @@ class AstGetItem(Ast):
 
 
 @dataclass
+class AstNamedArgument(Ast):
+    name: str
+    value: "AstExpr"
+
+
+@dataclass
 class AstFuncCall(Ast):
     func: "AstExpr"
-    args: list["AstExpr"] | None
+    # args can contain both positional (AstExpr) and named arguments (AstNamedArgument)
+    args: list[Union["AstExpr", AstNamedArgument]] | None
 
 
 @dataclass
@@ -350,6 +357,12 @@ class FpyTransformer(Transformer):
 
     func_call = AstFuncCall
     arguments = no_inline_or_meta(list)
+    named_argument = AstNamedArgument
+
+    @v_args(meta=True, inline=True)
+    def positional_argument(self, meta, value):
+        # Just return the expression directly for positional arguments
+        return value
 
     string = AstString
     number = AstNumber

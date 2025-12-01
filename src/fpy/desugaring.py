@@ -286,15 +286,17 @@ class DesugarForLoops(Transformer):
 
 class DesugarDefaultArgs(Transformer):
     """
-    Desugars function calls with missing arguments by filling in default values.
+    Desugars function calls with named or missing arguments by:
+    1. Reordering named arguments to positional order
+    2. Filling in default values for missing arguments
     
     For example, if we have:
-        def foo(a: U8, b: U8 = 5):
+        def foo(a: U8, b: U8 = 5, c: U8 = 10):
             pass
-        foo(1)
+        foo(c=15, a=1)
     
     This becomes:
-        foo(1, 5)
+        foo(1, 5, 15)
     
     Note: The type coercion for default values is handled during semantic analysis
     in PickTypesAndResolveAttrsAndItems.visit_AstDef. By the time this desugaring
@@ -305,39 +307,39 @@ class DesugarDefaultArgs(Transformer):
     def visit_AstFuncCall(self, node: AstFuncCall, state: CompileState):
         func = state.resolved_references.get(node.func)
         
-        if not is_instance_compat(func, FpyFunction):
-            # Not a user-defined function, don't desugar
+        if func is None or not hasattr(func, 'args') or func.args is None:
+            # Not a callable with known args
             return node
         
         func_args = func.args
-        if func_args is None:
+        
+        # Get the resolved arguments from semantic analysis
+        resolved_args = state.resolved_func_args.get(node)
+        if resolved_args is None:
+            # No resolved args stored - this means the original args are already fine
+            # (e.g., all positional and no named args)
             return node
         
-        node_args = node.args if node.args else []
+        # Build the final argument list by filling in defaults for None entries
+        new_args = []
+        for i, arg_expr in enumerate(resolved_args):
+            if arg_expr is not None:
+                new_args.append(arg_expr)
+            else:
+                # Fill in the default value
+                arg_info = func_args[i]
+                default_value = arg_info[2]
+                # Assert that default_value is not None because:
+                # 1. Semantic checks verify that non-default args come before default args
+                # 2. Semantic checks verify that if resolved_args[i] is None, arg must have default
+                # If this assertion fails, the semantic checker has a bug.
+                assert default_value is not None, (
+                    f"Missing default value for argument '{arg_info[0]}' at position {i}. "
+                    f"This should have been caught by semantic analysis."
+                )
+                new_args.append(default_value)
         
-        # Check if we need to fill in defaults
-        if len(node_args) == len(func_args):
-            # All arguments provided, no defaults needed
-            return node
-        
-        # Fill in missing arguments with their default values
-        new_args = list(node_args)
-        
-        for i in range(len(node_args), len(func_args)):
-            arg_name, arg_type, default_value = func_args[i]
-            # Assert that default_value is not None because:
-            # 1. Semantic checks verify that non-default args come before default args
-            # 2. Semantic checks verify that if len(node_args) < len(func_args), all
-            #    remaining args must have defaults
-            # If this assertion fails, the semantic checker has a bug.
-            assert default_value is not None, (
-                f"Missing default value for argument '{arg_name}' at position {i}. "
-                f"This should have been caught by semantic analysis."
-            )
-            # Add the default value expression as an argument
-            new_args.append(default_value)
-        
-        # Update the node's args
+        # Update the node's args with the reordered and filled-in arguments
         node.args = new_args
         
         return node
