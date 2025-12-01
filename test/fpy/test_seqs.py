@@ -3237,12 +3237,11 @@ assert test() == 20
     assert_run_success(fprime_test_api, seq)
 
 
-def test_default_arg_nested_func_can_access_outer_local(fprime_test_api):
-    """Default value in nested function can access outer function's local variables.
+def test_default_arg_nested_func_cannot_access_outer_local(fprime_test_api):
+    """Default value in nested function cannot access outer function's non-const local variables.
     
-    This is safe because nested functions can only be called from within their
-    defining scope, so the outer local will always be on the stack when the
-    default is evaluated.
+    This is rejected because if the nested function is called recursively,
+    the outer function's locals won't be on the correct stack frame.
     """
     seq = """
 def outer() -> U64:
@@ -3252,11 +3251,10 @@ def outer() -> U64:
         return a
     
     return inner()
-
-assert outer() == 10
 """
 
-    assert_run_success(fprime_test_api, seq)
+    # Should fail: outer local not accessible in default (recursion safety)
+    assert_compile_failure(fprime_test_api, seq)
 
 
 def test_default_arg_forward_reference(fprime_test_api):

@@ -1957,10 +1957,23 @@ class CalculateConstExprValues(Visitor):
         assert not is_instance_compat(node, AstExpr), node
 
 
-class CheckExpressionsInLocalScopeOrAreConsts(Visitor):
-    def __init__(self, scope: FpyScope):
+class CheckNonConstVarAccess(Visitor):
+    """Check that non-const variable access is only to allowed scopes.
+    
+    This is used for two cases:
+    1. Function bodies: can access own locals/args, but not outer function locals
+    2. Default values: can only access module-level vars (no function locals at all)
+    
+    The check is: if a variable is not a compile-time constant, it must be declared
+    in the `allowed_scope` (or the variable access is rejected).
+    
+    For function bodies, `allowed_scope` is the function's body scope.
+    For default values, `allowed_scope` is None (meaning only module-level is ok).
+    """
+    def __init__(self, allowed_scope: FpyScope | None, error_context: str = "this scope"):
         super().__init__()
-        self.scope = scope
+        self.allowed_scope = allowed_scope
+        self.error_context = error_context
 
     def visit_AstVar(self, node: AstVar, state: CompileState):
         var = state.resolved_references[node]
@@ -1968,20 +1981,43 @@ class CheckExpressionsInLocalScopeOrAreConsts(Visitor):
             return
 
         const_value = state.expr_converted_values.get(node)
-        if node.var not in state.local_scopes[node] and const_value is None:
-            # if it wasn't declared in this scope, or it was declared outside this scope and it's not a
-            # const
-            state.err(f"Cannot access {node.var} in this scope", node)
+        
+        # Compile-time constants are always allowed
+        if const_value is not None:
             return
+        
+        # Check if variable is declared in the allowed scope
+        if self.allowed_scope is not None and node.var in self.allowed_scope:
+            return
+        
+        # For default values (allowed_scope is None), check if module-level
+        # Module-level means the variable's declaration scope has no parent
+        if self.allowed_scope is None and is_instance_compat(var, FpyVariable):
+            var_decl_scope = state.local_scopes.get(var.declaration)
+            if var_decl_scope is not None and state.scope_parents.get(var_decl_scope) is None:
+                return
+        
+        # Not allowed - emit error
+        state.err(f"Cannot access '{node.var}' in {self.error_context}", node)
 
 
 class CheckFunctionsAccessConstExprsFromOutsideScope(Visitor):
     def visit_AstDef(self, node: AstDef, state: CompileState):
-        # inside the body, we should only be accessing these things:
-        # arguments, dict stuff, and things with a compile time constant value
-        CheckExpressionsInLocalScopeOrAreConsts(state.local_scopes[node.body]).run(
-            node.body, state
-        )
+        # Inside the function body: can access own locals/args, but not outer function locals
+        CheckNonConstVarAccess(
+            state.local_scopes[node.body], 
+            "this scope"
+        ).run(node.body, state)
+        
+        # Default values: can only access constants, no access to locals is allowed
+        # (no function locals at all, because recursive calls would break)
+        if node.parameters is not None:
+            for _, _, default_value in node.parameters:
+                if default_value is not None:
+                    CheckNonConstVarAccess(
+                        None,  # No local scope is allowed
+                        "default argument"
+                    ).run(default_value, state)
 
 
 class CheckAllBranchesReturn(Visitor):
