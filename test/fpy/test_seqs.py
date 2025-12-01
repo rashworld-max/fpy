@@ -3221,20 +3221,15 @@ assert test(100) == 100
 
 
 def test_default_arg_with_variable(fprime_test_api):
-    """Default value can reference a variable - evaluated at call site."""
+    """Default value cannot reference a variable - evaluated at call site."""
     seq = """
 x: U64 = 10
 
 def test(a: U64 = x) -> U64:
-    return a
-
-assert test() == 10
-x = 20
-# Since default is evaluated at call site, it uses current value of x
-assert test() == 20
+    return test()
 """
 
-    assert_run_success(fprime_test_api, seq)
+    assert_compile_failure(fprime_test_api, seq)
 
 
 def test_default_arg_nested_func_cannot_access_outer_local(fprime_test_api):
