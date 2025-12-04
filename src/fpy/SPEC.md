@@ -117,10 +117,10 @@ Inline macros behave like functions whose bodies are pre-defined sequences of by
 
 Available macros:
 
-* `exit(exit_code: U8) -> None`: terminates the sequence immediately by emitting an `ExitDirective`.
+* `exit(exit_code: U8)`: terminates the sequence immediately by emitting an `ExitDirective`.
 * `log(operand: F64) -> F64`: computes the natural logarithm of the operand using `FloatLogDirective` and leaves the `F64` result on the stack.
-* `sleep(seconds: U32, microseconds: U32) -> None`: waits for the specified relative duration (the assembler emits `WaitRelDirective`).
-* `sleep_until(wakeup_time: Fw.Time) -> None`: waits until the supplied absolute time using `WaitAbsDirective`.
+* `sleep(seconds: U32, microseconds: U32)`: waits for the specified relative duration (the assembler emits `WaitRelDirective`).
+* `sleep_until(wakeup_time: Fw.Time)`: waits until the supplied absolute time using `WaitAbsDirective`.
 * `now() -> Fw.Time`: pushes the current time via `PushTimeDirective`.
 * `iabs(value: I64) -> I64`: returns the absolute value of a signed 64-bit integer.
 * `fabs(value: F64) -> F64`: returns the absolute value of a 64-bit float.
@@ -132,31 +132,29 @@ Structs, arrays, and `Fw.Time` expose constructors whose callable name is the fu
 Each concrete numeric type provides a callable whose name matches the type (for example `U16(value)` or `F64(value)`). Casts accept exactly one numeric argument. Unlike implicit coercion, casts always force the operand into the target type even when this requires narrowing; range checks are suppressed and the value is truncated or rounded if necessary. See [Casting](#casting) for details.
 
 ## User-defined functions
-You can define new callables with Python-like syntax:
+A function definition introduces a new callable into scope. Function definitions must appear at the top level of the sequence; a function definition nested inside another function, a loop body, or a conditional branch is a compile-time error. The syntax is:
 ```
 def name(param_0: Type0, param_1: Type1 = default_value, ...) [-> ReturnType]:
     body
 ```
 
 ### Parameters
-Each parameter must have a type annotation. Parameters may optionally have default values (e.g., `param: Type = value`). Default values must be constant expressions; they cannot reference runtime values like telemetry channels, variables, or function calls.
+Each parameter declaration consists of a name followed by a colon and a type annotation. A parameter may optionally include a default value, written as `= expr` after the type annotation. Default value expressions must be constant expressions: literals, enum constants, or type constructors whose arguments are themselves constant expressions. Expressions referencing telemetry channels, variables, or function calls are not constant and produce a compile-time error when used as defaults.
+
+Arguments may be passed positionally or by name. Positional arguments are bound to parameters left-to-right. Named arguments use the syntax `name=expr` and bind the value of `expr` to the parameter with the matching name. All positional arguments must precede all named arguments. A parameter may not be bound more than once; supplying both a positional argument and a named argument for the same parameter is a compile-time error. If fewer arguments are supplied than parameters, the remaining parameters must have default values; those defaults are evaluated and bound. Supplying more positional arguments than parameters, or naming a parameter that does not exist, is a compile-time error.
 
 ### Return type
-The optional return type defaults to `None` (meaning the function cannot return a value). If a return type is specified, every path through the function must return a value of that type; omitting a return value or returning the wrong type is a compile-time error.
+The return type annotation `-> Type` is optional. When present, every control-flow path through the function body must terminate with a `return expr` statement where `expr` has a type coercible to `Type`. When absent, the function does not produce a value; `return` statements in such functions must not include an expression, and the call expression has no usable result.
 
 ### Scope
-Functions form their own scope and can access:
-* Parameters
-* Variables declared inside the function body
-* Top-level (global) variables defined before the function call site
-* Dictionary objects (commands, telemetry, parameters, enum constants, types, etc.)
-* Other user-defined functions (including forward references to functions defined later)
+A function body introduces a new scope. Within this scope the following names are visible:
+1. Parameters declared in the function signature.
+2. Local variables declared within the function body.
+3. Top-level variables declared before the call site of the function (not the definition site).
+4. All dictionary objects: commands, telemetry channels, parameters, enum constants, and types.
+5. All user-defined functions, including functions defined after the current function (forward references are permitted).
 
-Functions may read and write top-level variables, call other user-defined functions, commands, macros, constructors, and even recurse.
-
-### Restrictions
-* Function definitions are only allowed at the top level of the sequence. Nested function definitions (defining a function inside another function, loop, or conditional) are not allowed.
-* Default argument values must be constant expressions.
+Assignments to top-level variables within a function body modify the original variable. Assignments to parameters or local variables do not affect any outer scope.
 
 # Type conversion
 
