@@ -17,6 +17,7 @@ from fpy.ir import Ir, IrGoto, IrIf, IrLabel, IrPushLabelOffset
 from fpy.model import DirectiveErrorCode
 from fpy.types import (
     MAX_DIRECTIVES_COUNT,
+    MAX_STACK_SIZE,
     SIGNED_INTEGER_TYPES,
     SPECIFIC_NUMERIC_TYPES,
     UNSIGNED_INTEGER_TYPES,
@@ -400,8 +401,8 @@ class GenerateFunctionBody(Emitter):
             if not is_instance_compat(ref, FpyVariable):
                 # doesn't require space to be allocated
                 continue
-            if ref.frame_offset is None or ref.frame_offset < 0:
-                # No offset or function argument (negative)
+            if ref.frame_offset < 0:
+                # function argument (negative)
                 continue
             if ref.is_global and self.in_function:
                 # Global variable accessed from inside a function - already allocated at top level
@@ -978,9 +979,6 @@ class GenerateFunctionBody(Emitter):
 
 
 class GenerateModule(Emitter):
-    # Flag indicating we're generating top-level code (not inside a function)
-    # At top level, all variables use LOCAL directives since stack_frame_start = 0
-    in_function = False
 
     def emit_AstScopedBody(self, node: AstScopedBody, state: CompileState):
         if node is not state.root:
@@ -1055,10 +1053,6 @@ class ResolveLabels(IrPass):
 
 class FinalChecks(IrPass):
     def run(self, ir, state):
-        # if state.lvar_array_size_bytes > MAX_STACK_SIZE:
-        #     return BackendError(
-        #         f"Stack size too big (expected less than {MAX_STACK_SIZE}, had {state.lvar_array_size_bytes})"
-        #     )
         if len(ir) > MAX_DIRECTIVES_COUNT:
             return BackendError(
                 f"Too many directives in sequence (expected less than {MAX_DIRECTIVES_COUNT}, had {len(ir)})"
