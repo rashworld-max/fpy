@@ -195,7 +195,6 @@ class FpySequencerModel:
                     end=" ",
                 )
             print()
-        ctr = 0
         while self.next_dir_idx < len(self.dirs):
             next_dir = self.dirs[self.next_dir_idx]
             if debug:
@@ -213,8 +212,6 @@ class FpySequencerModel:
                         end=" ",
                     )
                 print()
-            if (ctr := ctr + 1) == 50:
-                break
         return DirectiveErrorCode.NO_ERROR
 
     def get_int_fmt_str(self, size: int, signed: bool) -> str:

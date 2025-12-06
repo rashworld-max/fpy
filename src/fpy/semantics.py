@@ -1345,7 +1345,6 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
 
         # Check provided args against expected
         for value_expr, arg in zip(resolved_args, func_args):
-            arg_name = arg[0]
             arg_type = arg[1]
 
             # Skip type check for default values from forward-called functions.

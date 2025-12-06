@@ -18,7 +18,6 @@ from fpy.bytecode.assembler import (
 )
 from fpy.bytecode.directives import (
     Directive,
-    StackOpDirective,
     # Directives with no args
     NoOpDirective,
     WaitRelDirective,

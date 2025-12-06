@@ -879,7 +879,6 @@ def serialize_directives(dirs: list[Directive]) -> tuple[bytes, int]:
     output_bytes = bytes()
 
     for dir in dirs:
-        print(dir)
         dir_bytes = dir.serialize()
         if len(dir_bytes) > MAX_DIRECTIVE_SIZE:
             print(

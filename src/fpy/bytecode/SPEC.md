@@ -20,13 +20,13 @@ Sleeps until an absolute time.
 | time_context | FwTimeContextStoreType       | stack  | Time context (user defined value, unused by Fpy) |
 | time_base    | U16      | stack  | Time base |
 
-## GOTO (4)
+## GOTO (3)
 Sets the index of the next directive to execute.
 | Arg Name | Arg Type | Source     | Description |
 |----------|----------|------------|-------------|
 | dir_idx  | U32      | hardcoded | The statement index to execute next |
 
-## IF (5)
+## IF (4)
 Pops a byte off the stack. If the byte is not 0, proceed to the next directive, otherwise goto a hardcoded directive index.
  
 | Arg Name             | Arg Type | Source     | Description |
@@ -34,10 +34,10 @@ Pops a byte off the stack. If the byte is not 0, proceed to the next directive, 
 | false_goto_dir_index| U32      | hardcoded | Directive index to jump to if false |
 | condition          | bool     | stack     | Condition to evaluate |
 
-## NO_OP (6)
+## NO_OP (5)
 Does nothing.
 
-## PUSH_TLM_VAL (7)
+## PUSH_TLM_VAL (6)
 Pushes a telemetry value buffer to the stack.
 | Arg Name     | Arg Type | Source     | Description |
 |--------------|----------|------------|-------------|
@@ -46,7 +46,7 @@ Pushes a telemetry value buffer to the stack.
 | Stack Result Type | Description |
 | ------------------|-------------|
 | bytes | The raw bytes of the telemetry value buffer |
-## PUSH_PRM (8)
+## PUSH_PRM (7)
 Pushes a parameter buffer to the stack.
 | Arg Name     | Arg Type | Source     | Description |
 |--------------|----------|------------|-------------|
@@ -56,7 +56,7 @@ Pushes a parameter buffer to the stack.
 | ------------------|-------------|
 | bytes | The raw bytes of the parameter buffer |
 
-## CONST_CMD (9)
+## CONST_CMD (8)
 Runs a command with a constant opcode and a constant byte array of arguments.
 | Arg Name   | Arg Type | Source     | Description |
 |------------|----------|------------|-------------|
@@ -68,7 +68,7 @@ Runs a command with a constant opcode and a constant byte array of arguments.
 | Fw.CmdResponse | The CmdResponse that the command returned |
 
 
-## OR (10)
+## OR (9)
 Performs an `or` between two booleans, pushes result to stack.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -79,7 +79,7 @@ Performs an `or` between two booleans, pushes result to stack.
 | ------------------|-------------|
 | bool | The result |
 
-## AND (11)
+## AND (10)
 Performs an `and` between two booleans, pushes result to stack.
 
 | Arg Name | Arg Type | Source | Description |
@@ -90,7 +90,7 @@ Performs an `and` between two booleans, pushes result to stack.
 | Stack Result Type | Description |
 | ------------------|-------------|
 | bool | The result |
-## IEQ (12)
+## IEQ (11)
 Compares two integers for equality, pushes result to stack. Doesn't differentiate between signed and unsigned.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -100,7 +100,7 @@ Compares two integers for equality, pushes result to stack. Doesn't differentiat
 | Stack Result Type | Description |
 | ------------------|-------------|
 | bool | The result |
-## INE (13)
+## INE (12)
 Compares two integers for inequality, pushes result to stack. Doesn't differentiate between signed and unsigned.
 
 | Arg Name | Arg Type | Source | Description |
@@ -111,7 +111,7 @@ Compares two integers for inequality, pushes result to stack. Doesn't differenti
 | Stack Result Type | Description |
 | ------------------|-------------|
 | bool | The result |
-## ULT (14)
+## ULT (13)
 Performs an unsigned less than comparison on two unsigned integers, pushes result to stack
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -121,7 +121,7 @@ Performs an unsigned less than comparison on two unsigned integers, pushes resul
 | Stack Result Type | Description |
 | ------------------|-------------|
 | bool | The result |
-## ULE (15)
+## ULE (14)
 Performs an unsigned less than or equal to comparison on two unsigned integers, pushes result to stack.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -131,7 +131,7 @@ Performs an unsigned less than or equal to comparison on two unsigned integers, 
 | Stack Result Type | Description |
 | ------------------|-------------|
 | bool | The result |
-## UGT (16)
+## UGT (15)
 Performs an unsigned greater than comparison on two unsigned integers, pushes result to stack.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -141,7 +141,7 @@ Performs an unsigned greater than comparison on two unsigned integers, pushes re
 | Stack Result Type | Description |
 | ------------------|-------------|
 | bool | The result |
-## UGE (17)
+## UGE (16)
 Performs an unsigned greater than or equal to comparison on two unsigned integers, pushes result to stack.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -151,7 +151,7 @@ Performs an unsigned greater than or equal to comparison on two unsigned integer
 | Stack Result Type | Description |
 | ------------------|-------------|
 | bool | The result |
-## SLT (18)
+## SLT (17)
 Performs a signed less than comparison on two signed integers, pushes result to stack.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -161,7 +161,7 @@ Performs a signed less than comparison on two signed integers, pushes result to 
 | Stack Result Type | Description |
 | ------------------|-------------|
 | bool | The result |
-## SLE (19)
+## SLE (18)
 Performs a signed less than or equal to comparison on two signed integers, pushes result to stack.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -171,7 +171,7 @@ Performs a signed less than or equal to comparison on two signed integers, pushe
 | Stack Result Type | Description |
 | ------------------|-------------|
 | bool | The result |
-## SGT (20)
+## SGT (19)
 Performs a signed greater than comparison on two signed integers, pushes result to stack.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -181,7 +181,7 @@ Performs a signed greater than comparison on two signed integers, pushes result 
 | Stack Result Type | Description |
 | ------------------|-------------|
 | bool | The result |
-## SGE (21)
+## SGE (20)
 Performs a signed greater than or equal to comparison on two signed integers, pushes result to stack.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -191,7 +191,7 @@ Performs a signed greater than or equal to comparison on two signed integers, pu
 | Stack Result Type | Description |
 | ------------------|-------------|
 | bool | The result |
-## FEQ (22)
+## FEQ (21)
 Compares two floats for equality, pushes result to stack. If neither is NaN and they are otherwise equal, pushes 1 to stack, otherwise 0. Infinity is handled consistent with C++.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -201,7 +201,7 @@ Compares two floats for equality, pushes result to stack. If neither is NaN and 
 | Stack Result Type | Description |
 | ------------------|-------------|
 | bool | The result |
-## FNE (23)
+## FNE (22)
 Compares two floats for inequality, pushes result to stack. If either is NaN or they are not equal, pushes 1 to stack, otherwise 0. Infinity is handled consistent with C++.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -211,7 +211,7 @@ Compares two floats for inequality, pushes result to stack. If either is NaN or 
 | Stack Result Type | Description |
 | ------------------|-------------|
 | bool | The result |
-## FLT (24)
+## FLT (23)
 Performs a less than comparison on two floats, pushes result to stack. If neither is NaN and the second < first, pushes 1 to stack, otherwise 0. Infinity is handled consistent with C++.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -221,7 +221,7 @@ Performs a less than comparison on two floats, pushes result to stack. If neithe
 | Stack Result Type | Description |
 | ------------------|-------------|
 | bool | The result |
-## FLE (25)
+## FLE (24)
 Performs a less than or equal to comparison on two floats, pushes result to stack. If neither is NaN and the second <= first, pushes 1 to stack, otherwise 0. Infinity is handled consistent with C++.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -231,7 +231,7 @@ Performs a less than or equal to comparison on two floats, pushes result to stac
 | Stack Result Type | Description |
 | ------------------|-------------|
 | bool | The result |
-## FGT (26)
+## FGT (25)
 Performs a greater than comparison on two floats, pushes result to stack. If neither is NaN and the second > first, pushes 1 to stack, otherwise 0. Infinity is handled consistent with C++.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -241,7 +241,7 @@ Performs a greater than comparison on two floats, pushes result to stack. If nei
 | Stack Result Type | Description |
 | ------------------|-------------|
 | bool | The result |
-## FGE (27)
+## FGE (26)
 Performs a greater than or equal to comparison on two floats, pushes result to stack. If neither is NaN and the second >= first, pushes 1 to stack, otherwise 0. Infinity is handled consistent with C++.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -251,7 +251,7 @@ Performs a greater than or equal to comparison on two floats, pushes result to s
 | Stack Result Type | Description |
 | ------------------|-------------|
 | bool | The result |
-## NOT (28)
+## NOT (27)
 Performs a boolean not operation on a boolean, pushes result to stack.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -260,7 +260,7 @@ Performs a boolean not operation on a boolean, pushes result to stack.
 | Stack Result Type | Description |
 | ------------------|-------------|
 | bool | The result |
-## FPTOSI (29)
+## FPTOSI (28)
 Converts a float to a signed integer, pushes result to stack.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -269,7 +269,7 @@ Converts a float to a signed integer, pushes result to stack.
 | Stack Result Type | Description |
 | ------------------|-------------|
 | I64 | The result |
-## FPTOUI (30)
+## FPTOUI (29)
 Converts a float to an unsigned integer, pushes result to stack.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -278,7 +278,7 @@ Converts a float to an unsigned integer, pushes result to stack.
 | Stack Result Type | Description |
 | ------------------|-------------|
 | U64 | The result |
-## SITOFP (31)
+## SITOFP (30)
 Converts a signed integer to a float, pushes result to stack.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -286,7 +286,7 @@ Converts a signed integer to a float, pushes result to stack.
 | Stack Result Type | Description |
 | ------------------|-------------|
 | F64 | The result |
-## UITOFP (32)
+## UITOFP (31)
 Converts an unsigned integer to a float, pushes result to stack.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -295,7 +295,7 @@ Converts an unsigned integer to a float, pushes result to stack.
 | Stack Result Type | Description |
 | ------------------|-------------|
 | F64 | The result |
-## IADD (33)
+## ADD (32)
 Performs integer addition, pushes result to stack.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -305,7 +305,7 @@ Performs integer addition, pushes result to stack.
 | Stack Result Type | Description |
 | ------------------|-------------|
 | I64 | The result |
-## ISUB (34)
+## SUB (33)
 Performs integer subtraction, pushes result to stack.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -315,7 +315,7 @@ Performs integer subtraction, pushes result to stack.
 | Stack Result Type | Description |
 | ------------------|-------------|
 | I64 | The result |
-## IMUL (35)
+## MUL (34)
 Performs integer multiplication, pushes result to stack.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -325,7 +325,7 @@ Performs integer multiplication, pushes result to stack.
 | Stack Result Type | Description |
 | ------------------|-------------|
 | I64 | The result |
-## UDIV (36)
+## UDIV (35)
 Performs unsigned integer division, pushes result to stack. A divisor of 0 will result in DOMAIN_ERROR.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -335,7 +335,7 @@ Performs unsigned integer division, pushes result to stack. A divisor of 0 will 
 | Stack Result Type | Description |
 | ------------------|-------------|
 | U64 | The result |
-## SDIV (37)
+## SDIV (36)
 Performs signed integer division, pushes result to stack. A divisor of 0 will result in DOMAIN_ERROR.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -345,7 +345,7 @@ Performs signed integer division, pushes result to stack. A divisor of 0 will re
 | Stack Result Type | Description |
 | ------------------|-------------|
 | I64 | The result |
-## UMOD (38)
+## UMOD (37)
 Performs unsigned integer modulo, pushes result to stack. A 0 divisor (rhs) will result in DOMAIN_ERROR.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -355,7 +355,7 @@ Performs unsigned integer modulo, pushes result to stack. A 0 divisor (rhs) will
 | Stack Result Type | Description |
 | ------------------|-------------|
 | U64 | The result |
-## SMOD (39)
+## SMOD (38)
 Performs signed integer modulo, pushes result to stack. A 0 divisor (rhs) will result in DOMAIN_ERROR.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -365,7 +365,7 @@ Performs signed integer modulo, pushes result to stack. A 0 divisor (rhs) will r
 | Stack Result Type | Description |
 | ------------------|-------------|
 | I64 | The result |
-## FADD (40)
+## FADD (39)
 Performs float addition, pushes result to stack. NaN, and infinity are handled consistently with C++ addition.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -375,7 +375,7 @@ Performs float addition, pushes result to stack. NaN, and infinity are handled c
 | Stack Result Type | Description |
 | ------------------|-------------|
 | F64 | The result |
-## FSUB (41)
+## FSUB (40)
 Performs float subtraction, pushes result to stack. NaN, and infinity are handled consistently with C++ subtraction.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
@@ -385,7 +385,7 @@ Performs float subtraction, pushes result to stack. NaN, and infinity are handle
 | Stack Result Type | Description |
 | ------------------|-------------|
 | F64 | The result |
-## FMUL (42)
+## FMUL (41)
 Performs float multiplication, pushes result to stack. NaN, and infinity are handled consistently with C++ multiplication.
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
