@@ -79,16 +79,16 @@ _test: or_test
        | SUB_OP factor -> unary_op # unary minus (negation)
        | power
 
-?power: atomexpr POW_OP factor -> binary_op
-      | atomexpr
+?power: atom_expr POW_OP factor -> binary_op
+      | atom_expr
 
 argument: name "=" expr -> named_argument
         | expr -> positional_argument
 arguments: argument ("," argument)*
 
-?atomexpr: atomexpr "(" [arguments] ")" -> func_call
-          | atomexpr "[" expr "]" -> get_item
-          | atomexpr "." name -> get_attr
+?atom_expr: atom_expr "(" [arguments] ")" -> func_call
+          | atom_expr "[" expr "]" -> get_item
+          | atom_expr "." name -> get_attr
           | atom
 
 ?atom: _literal

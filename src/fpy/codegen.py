@@ -17,7 +17,6 @@ from fpy.ir import Ir, IrGoto, IrIf, IrLabel, IrPushLabelOffset
 from fpy.model import DirectiveErrorCode
 from fpy.types import (
     MAX_DIRECTIVES_COUNT,
-    MAX_STACK_SIZE,
     SIGNED_INTEGER_TYPES,
     SPECIFIC_NUMERIC_TYPES,
     UNSIGNED_INTEGER_TYPES,
