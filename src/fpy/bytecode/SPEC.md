@@ -1,8 +1,44 @@
 # Directives
 
+## Notation and Conventions
+
 * Format is DIRECTIVE_NAME (opcode).
 * Arguments can either be "hardcoded", meaning they are present in the sequence binary after the opcode, or "stack", meaning they are popped off the stack at runtime.
 * Directives can have a "stack result type", which is the type that they push to the stack after execution.
+* All multi-byte values are stored in **big-endian** byte order.
+* `StackSizeType` is an alias for `U32` (4 bytes, unsigned).
+* `len(stack)` refers to the current number of bytes on the stack.
+* `max_stack_size` is the maximum allowed stack size (implementation-defined, e.g., 4096 bytes).
+* Array slice notation `stack[a .. b)` means bytes from index `a` (inclusive) to `b` (exclusive).
+
+## Stack Frame Model
+
+The sequencer maintains two pointers:
+- `next_dir_idx`: Index of the next directive to execute.
+- `stack_frame_start`: Byte offset from the start of the stack where the current function's local variables begin.
+
+**Stack Layout During Function Call:**
+```
+Low addresses                                                        High addresses
+[global vars][...caller locals...][args][ret_addr][saved_fp][callee locals][top]
+                                                            ^
+                                             stack_frame_start
+```
+
+- **Global variables** occupy a fixed region at the bottom of the stack (starting at offset 0).
+- **Function arguments** are pushed by the caller before CALL and accessed by the callee using negative offsets from `stack_frame_start`.
+- **Stack frame header** consists of 8 bytes: `return_addr` (U32) followed by `saved_frame_ptr` (U32). This is `STACK_FRAME_HEADER_SIZE = 8`.
+- **Local variables** are accessed using non-negative offsets from `stack_frame_start`.
+
+## Error Codes
+
+The following error codes may be returned by directives:
+- `STACK_ACCESS_OUT_OF_BOUNDS`: Attempted to read/write outside valid stack region.
+- `STACK_OVERFLOW`: Operation would exceed `max_stack_size`.
+- `STMT_OUT_OF_BOUNDS`: Jump target is outside the directive array.
+- `DOMAIN_ERROR`: Mathematical operation on invalid input (e.g., division by zero).
+
+---
 
 ## WAIT_REL (1)
 Sleeps for a relative duration from the current time.
@@ -556,23 +592,55 @@ Pushes a hard-coded count of 0x00-bytes to the stack.
 | bytes | A series of 0 bytes of length `size` |
 
 ## STORE_LOCAL_CONST_OFFSET (59)
-Pops a hard-coded number of bytes off the stack, and writes them to the local variable array at a hard-coded offset relative to the current stack frame start.
+Stores a value to a local variable at a compile-time-known offset relative to the current stack frame.
+
+**Preconditions:**
+- `len(stack) >= size`
+- `stack_frame_start + lvar_offset >= 0`
+- `stack_frame_start + lvar_offset + size <= len(stack)`
+
+**Semantics:**
+1. Let `value` be the top `size` bytes of the stack (big-endian, with the first byte at `stack[len(stack) - size]`).
+2. Remove these `size` bytes from the stack.
+3. Write `value` to `stack[stack_frame_start + lvar_offset .. stack_frame_start + lvar_offset + size)`.
+
+**Error Conditions:**
+- If `len(stack) < size`: `STACK_ACCESS_OUT_OF_BOUNDS`
+- If `stack_frame_start + lvar_offset < 0`: `STACK_ACCESS_OUT_OF_BOUNDS`
+- If `stack_frame_start + lvar_offset + size > len(stack)` (after pop): `STACK_ACCESS_OUT_OF_BOUNDS`
+
 | Arg Name    | Arg Type | Source     | Description |
 |-------------|----------|------------|-------------|
-| lvar_offset | I32      | hardcoded  | Local variable offset (relative to stack frame start) |
-| size        | U32      | hardcoded  | Number of bytes |
-| value       | bytes    | stack      | Value to store |
+| lvar_offset | I32      | hardcoded  | Signed byte offset relative to `stack_frame_start`. Negative values access memory below the frame (e.g., function arguments). |
+| size        | U32      | hardcoded  | Number of bytes to store. |
+| value       | bytes    | stack      | The value to store (popped from stack top). |
 
 ## LOAD_LOCAL (60)
-Reads a hard-coded number of bytes from the local variable array at a specific offset relative to the current stack frame start, and pushes them to the stack.
+Loads a value from a local variable at a compile-time-known offset relative to the current stack frame, and pushes it to the stack.
+
+**Preconditions:**
+- `stack_frame_start + lvar_offset >= 0`
+- `stack_frame_start + lvar_offset + size <= len(stack)`
+- `len(stack) + size <= max_stack_size`
+
+**Semantics:**
+1. Let `addr = stack_frame_start + lvar_offset`.
+2. Read `size` bytes from `stack[addr .. addr + size)`.
+3. Push these bytes to the top of the stack (preserving byte order).
+
+**Error Conditions:**
+- If `stack_frame_start + lvar_offset < 0`: `STACK_ACCESS_OUT_OF_BOUNDS`
+- If `stack_frame_start + lvar_offset + size > len(stack)`: `STACK_ACCESS_OUT_OF_BOUNDS`
+- If `len(stack) + size > max_stack_size`: `STACK_OVERFLOW`
+
 | Arg Name    | Arg Type | Source     | Description |
 |-------------|----------|------------|-------------|
-| lvar_offset | I32      | hardcoded  | Local variable offset (relative to stack frame start, can be negative for function args) |
-| size        | U32      | hardcoded  | Number of bytes |
+| lvar_offset | I32      | hardcoded  | Signed byte offset relative to `stack_frame_start`. Negative values access memory below the frame (e.g., function arguments pushed before CALL). |
+| size        | U32      | hardcoded  | Number of bytes to load. |
 
 | Stack Result Type | Description |
 | ------------------|-------------|
-| bytes | The bytes from the lvar array |
+| bytes | The `size` bytes read from the local variable location. |
 
 ## PUSH_VAL (61)
 Pushes a constant array of bytes to the stack.
@@ -669,53 +737,183 @@ Pops a StackSizeType `offset` off the stack, then a StackSizeType `byteCount`. L
 | bytes | The peeked bytes |
 
 ## STORE_LOCAL (71)
-Pops an offset (StackSizeType) off the stack. Pops a hardcoded number of bytes from the top of the stack, and moves them to the local variable array at the offset relative to the current stack frame start.
+Stores a value to a local variable at a runtime-determined offset relative to the current stack frame.
+
+**Preconditions:**
+- `len(stack) >= size + 4` (value bytes + offset)
+- After popping offset: `stack_frame_start + lvar_offset >= 0`
+- After popping offset: `stack_frame_start + lvar_offset + size <= len(stack)`
+
+**Semantics:**
+1. Pop a 4-byte signed integer `lvar_offset` from the stack (big-endian, I32).
+2. Let `value` be the top `size` bytes of the remaining stack.
+3. Remove these `size` bytes from the stack.
+4. Let `addr = stack_frame_start + lvar_offset`.
+5. Write `value` to `stack[addr .. addr + size)`.
+
+**Error Conditions:**
+- If `len(stack) < size + 4`: `STACK_ACCESS_OUT_OF_BOUNDS`
+- If `stack_frame_start + lvar_offset < 0`: `STACK_ACCESS_OUT_OF_BOUNDS`
+- If `stack_frame_start + lvar_offset + size > len(stack)` (after popping offset, before popping value): `STACK_ACCESS_OUT_OF_BOUNDS`
+
 | Arg Name    | Arg Type | Source     | Description |
 |-------------|----------|------------|-------------|
-| size        | U32      | hardcoded  | Number of bytes |
-| lvar_offset | I32      | stack      | Local variable offset (relative to stack frame start) |
-| value       | bytes    | stack      | Value to store |
+| size        | U32      | hardcoded  | Number of bytes to store. |
+| lvar_offset | I32      | stack      | Signed byte offset relative to `stack_frame_start`. |
+| value       | bytes    | stack      | The value to store (below the offset on stack). |
 
 ## CALL (72)
-Pops a StackSizeType offset from the stack (the target directive index), saves the current instruction pointer and frame pointer to the stack as StackSizeTypes, then jumps to the target. The stack frame start is updated to point to the top of the stack.
+Performs a function call. Pops the target directive index from the stack, saves the return address and current frame pointer to the stack, then transfers control to the target.
+
+**Preconditions:**
+- `len(stack) >= 4` (for target address)
+- `len(stack) + 8 <= max_stack_size` (space for return address and frame pointer)
+- `0 <= target < len(directives)` (checked at jump time by main loop)
+
+**Semantics (in order):**
+1. Pop a 4-byte unsigned integer `target` from the stack (StackSizeType = U32, big-endian).
+2. Let `return_addr = next_dir_idx` (the index of the instruction that would execute after this CALL).
+3. Set `next_dir_idx = target`.
+4. Push `return_addr` as a 4-byte unsigned integer (U32, big-endian) to the stack.
+5. Push `stack_frame_start` as a 4-byte unsigned integer (U32, big-endian) to the stack.
+6. Set `stack_frame_start = len(stack)` (the new frame begins immediately after the saved frame pointer).
+
+**Stack Layout After CALL:**
+```
+[... function arguments ...][return_addr (4 bytes)][saved_frame_ptr (4 bytes)]
+                                                                              ^
+                                                        stack_frame_start ────┘
+```
+
+**Error Conditions:**
+- If `len(stack) < 4`: `STACK_ACCESS_OUT_OF_BOUNDS`
+- If `len(stack) + 8 > max_stack_size`: `STACK_OVERFLOW`
+- If `target >= len(directives)`: `STMT_OUT_OF_BOUNDS` (checked when directive executes)
+
+**Note:** Function arguments must be pushed to the stack before the target address. The callee accesses arguments using negative `lvar_offset` values in LOAD_LOCAL (e.g., `lvar_offset = -(STACK_FRAME_HEADER_SIZE + arg_size)` where `STACK_FRAME_HEADER_SIZE = 8`).
+
 | Arg Name | Arg Type | Source | Description |
 |----------|----------|--------|-------------|
-| target   | StackSizeType | stack | Directive index to jump to |
+| target   | U32 (StackSizeType) | stack | Directive index to jump to. |
 
 ## RETURN (73)
-Returns from a function call. Pops the return value (if any), restores the stack frame start and instruction pointer from the stack, discards the function arguments, then pushes the return value back.
+Returns from a function call. Restores the caller's execution context and optionally returns a value.
+
+**Preconditions:**
+- `len(stack) >= return_val_size` (for return value, if any)
+- `len(stack) >= stack_frame_start` (sanity check)
+- After truncating to frame: `len(stack) >= 8` (saved frame pointer + return address)
+- After restoring frame: `len(stack) >= call_args_size` (to discard arguments)
+
+**Semantics (in order):**
+1. If `return_val_size > 0`: Pop `return_val_size` bytes from the stack as `return_value`.
+2. Truncate the stack to `stack_frame_start` (discard all local variables allocated in this frame).
+3. Pop a 4-byte unsigned integer as `saved_frame_ptr` (U32, big-endian).
+4. Pop a 4-byte unsigned integer as `return_addr` (U32, big-endian).
+5. Set `stack_frame_start = saved_frame_ptr`.
+6. Set `next_dir_idx = return_addr`.
+7. Pop and discard `call_args_size` bytes (the function arguments pushed by the caller).
+8. If `return_val_size > 0`: Push `return_value` to the stack.
+
+**Stack Transformation:**
+```
+Before RETURN:
+[... caller locals ...][args (call_args_size)][ret_addr][saved_fp][... callee locals ...][return_value]
+                                                                  ^                       ^
+                                                   stack_frame_start                      stack top
+
+After RETURN:
+[... caller locals ...][return_value]
+^                                    ^
+stack_frame_start (restored)         stack top
+```
+
+**Error Conditions:**
+- If `len(stack) < return_val_size`: `STACK_ACCESS_OUT_OF_BOUNDS`
+- If `stack_frame_start > len(stack)`: `STACK_ACCESS_OUT_OF_BOUNDS` (corrupt frame)
+- If remaining stack after truncation `< 8`: `STACK_ACCESS_OUT_OF_BOUNDS`
+- If remaining stack after header pop `< call_args_size`: `STACK_ACCESS_OUT_OF_BOUNDS`
+
 | Arg Name        | Arg Type | Source     | Description |
 |-----------------|----------|------------|-------------|
-| return_val_size | U32      | hardcoded  | Size of return value in bytes (0 if no return value) |
-| call_args_size  | U32      | hardcoded  | Total size of function arguments in bytes |
+| return_val_size | U32      | hardcoded  | Size of return value in bytes. Use 0 for void functions. |
+| call_args_size  | U32      | hardcoded  | Total size of function arguments in bytes. This must match the bytes pushed by the caller before CALL. |
 
 | Stack Result Type | Description |
 | ------------------|-------------|
-| bytes | The return value (if return_val_size > 0) |
+| bytes | The return value (only if `return_val_size > 0`). |
 
 ## LOAD_GLOBAL (74)
-Reads a hard-coded number of bytes from the global variable area at an absolute offset from the start of the stack, and pushes them to the stack.
+Loads a value from an absolute address in the stack (used for global variables), and pushes it to the stack.
+
+**Preconditions:**
+- `global_offset >= 0`
+- `global_offset + size <= len(stack)`
+- `len(stack) + size <= max_stack_size`
+
+**Semantics:**
+1. Read `size` bytes from `stack[global_offset .. global_offset + size)`.
+2. Push these bytes to the top of the stack (preserving byte order).
+
+**Error Conditions:**
+- If `global_offset < 0`: `STACK_ACCESS_OUT_OF_BOUNDS`
+- If `global_offset + size > len(stack)`: `STACK_ACCESS_OUT_OF_BOUNDS`
+- If `len(stack) + size > max_stack_size`: `STACK_OVERFLOW`
+
 | Arg Name      | Arg Type | Source     | Description |
 |---------------|----------|------------|-------------|
-| global_offset | U32      | hardcoded  | Absolute offset from start of stack |
-| size          | U32      | hardcoded  | Number of bytes |
+| global_offset | U32      | hardcoded  | Absolute byte offset from the start of the stack (index 0). |
+| size          | U32      | hardcoded  | Number of bytes to load. |
 
 | Stack Result Type | Description |
 | ------------------|-------------|
-| bytes | The bytes from the global variable area |
+| bytes | The `size` bytes read from the global variable location. |
 
 ## STORE_GLOBAL (75)
-Pops an offset (StackSizeType) off the stack. Pops a hardcoded number of bytes from the top of the stack, and stores them at the absolute offset from the start of the stack.
+Stores a value to an absolute address in the stack (used for global variables), with the offset determined at runtime.
+
+**Preconditions:**
+- `len(stack) >= size + 4` (value bytes + offset)
+- After popping offset: `global_offset >= 0`
+- After popping offset: `global_offset + size <= len(stack)`
+
+**Semantics:**
+1. Pop a 4-byte signed integer `global_offset` from the stack (big-endian, I32).
+2. Let `value` be the top `size` bytes of the remaining stack.
+3. Remove these `size` bytes from the stack.
+4. Write `value` to `stack[global_offset .. global_offset + size)`.
+
+**Error Conditions:**
+- If `len(stack) < size + 4`: `STACK_ACCESS_OUT_OF_BOUNDS`
+- If `global_offset < 0`: `STACK_ACCESS_OUT_OF_BOUNDS`
+- If `global_offset + size > len(stack)` (after popping offset, before popping value): `STACK_ACCESS_OUT_OF_BOUNDS`
+
 | Arg Name      | Arg Type | Source     | Description |
 |---------------|----------|------------|-------------|
-| size          | U32      | hardcoded  | Number of bytes |
-| global_offset | U32      | stack      | Absolute offset from start of stack |
-| value         | bytes    | stack      | Value to store |
+| size          | U32      | hardcoded  | Number of bytes to store. |
+| global_offset | I32      | stack      | Absolute byte offset from the start of the stack. |
+| value         | bytes    | stack      | The value to store (below the offset on stack). |
 
 ## STORE_GLOBAL_CONST_OFFSET (76)
-Pops a hard-coded number of bytes off the stack, and writes them to the global variable area at a hard-coded absolute offset from the start of the stack.
+Stores a value to an absolute address in the stack (used for global variables), with a compile-time-known offset.
+
+**Preconditions:**
+- `len(stack) >= size`
+- `global_offset >= 0`
+- `global_offset + size <= len(stack)`
+
+**Semantics:**
+1. Let `value` be the top `size` bytes of the stack.
+2. Remove these `size` bytes from the stack.
+3. Write `value` to `stack[global_offset .. global_offset + size)`.
+
+**Error Conditions:**
+- If `len(stack) < size`: `STACK_ACCESS_OUT_OF_BOUNDS`
+- If `global_offset < 0`: `STACK_ACCESS_OUT_OF_BOUNDS`
+- If `global_offset + size > len(stack)` (after pop): `STACK_ACCESS_OUT_OF_BOUNDS`
+
 | Arg Name      | Arg Type | Source     | Description |
 |---------------|----------|------------|-------------|
-| global_offset | U32      | hardcoded  | Absolute offset from start of stack |
-| size          | U32      | hardcoded  | Number of bytes |
-| value         | bytes    | stack      | Value to store |
+| global_offset | U32      | hardcoded  | Absolute byte offset from the start of the stack. |
+| size          | U32      | hardcoded  | Number of bytes to store. |
+| value         | bytes    | stack      | The value to store (popped from stack top). |

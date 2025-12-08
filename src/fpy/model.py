@@ -485,7 +485,7 @@ class FpySequencerModel:
     def handle_push_tlm_val(self, dir: PushTlmValDirective):
         whole_value: bytearray = self.tlm_db.get(dir.chan_id)
         if whole_value is None:
-            return DirectiveErrorCode.TLM_NOT_FOUND
+            return DirectiveErrorCode.TLM_CHAN_NOT_FOUND
 
         if len(self.stack) + len(whole_value) > self.max_stack_size:
             return DirectiveErrorCode.STACK_OVERFLOW
@@ -946,6 +946,10 @@ class FpySequencerModel:
         if len(self.stack) < StackSizeType.getMaxSize():
             return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
 
+        # Check for stack overflow before pushing header (8 bytes net: pop 4, push 8)
+        if len(self.stack) + STACK_FRAME_HEADER_SIZE - StackSizeType.getMaxSize() > self.max_stack_size:
+            return DirectiveErrorCode.STACK_OVERFLOW
+
         offset = self.pop(size=StackSizeType.getMaxSize(), signed=False)
         return_addr = self.next_dir_idx
         self.next_dir_idx = offset
@@ -957,7 +961,17 @@ class FpySequencerModel:
         self.stack_frame_start = len(self.stack)
 
     def handle_return(self, dir: ReturnDirective):
-        if len(self.stack) < dir.return_val_size + StackSizeType.getMaxSize() * 2:
+        # Check that return value (if any) can be popped from current frame
+        if dir.return_val_size > 0:
+            if len(self.stack) < dir.return_val_size:
+                return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
+
+        # Check that stack_frame_start is valid
+        if self.stack_frame_start > len(self.stack):
+            return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
+
+        # Check that frame header exists below stack_frame_start
+        if self.stack_frame_start < STACK_FRAME_HEADER_SIZE:
             return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
 
         return_val = b""
@@ -971,6 +985,11 @@ class FpySequencerModel:
         instruction_ptr = self.pop(size=StackSizeType.getMaxSize(), signed=False)
         self.stack_frame_start = frame_ptr
         self.next_dir_idx = instruction_ptr
+
+        # Check that args can be popped
+        if len(self.stack) < dir.call_args_size:
+            return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
+
         # okay now pop the original args. just discard them
         self.pop(type=bytes, size=dir.call_args_size)
         # and push return value if one exists

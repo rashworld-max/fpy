@@ -187,6 +187,7 @@ class GenerateFunctions(Visitor):
         code.extend(GenerateFunctionBody().emit(node.body, state))
         func = state.resolved_symbols[node.name]
         if func.return_type is NothingValue and not state.does_return[node.body]:
+            # implicit empty return
             arg_bytes = sum(arg[1].getMaxSize() for arg in (func.args or []))
             code.append(ReturnDirective(0, arg_bytes))
         state.generated_funcs[node] = code

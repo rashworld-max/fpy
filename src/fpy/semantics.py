@@ -45,14 +45,11 @@ except ImportError:
     UNION_TYPES = (Union,)
 
 from fpy.bytecode.directives import (
-    BINARY_STACK_OPS,
     BOOLEAN_OPERATORS,
     NUMERIC_OPERATORS,
-    UNARY_STACK_OPS,
     ArrayIndexType,
     LoopVarType,
     BinaryStackOp,
-    MemCompareDirective,
     UnaryStackOp,
 )
 from fprime_gds.common.templates.ch_template import ChTemplate

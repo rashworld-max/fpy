@@ -2748,6 +2748,32 @@ test()
     assert_run_success(fprime_test_api, seq)
 
 
+def test_get_outside_array_element_const_index_in_func(fprime_test_api):
+    """Test that functions can access array elements of global variables with a constant index"""
+    seq = """
+arr: Svc.ComQueueDepth = Svc.ComQueueDepth(123, 456)
+def test():
+    assert arr[0] == 123
+    assert arr[1] == 456
+test()
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
+def test_get_outside_array_element_nonconst_index_in_func(fprime_test_api):
+    """Test that functions can access array elements of global variables with a non-constant index"""
+    seq = """
+arr: Svc.ComQueueDepth = Svc.ComQueueDepth(123, 456)
+def test():
+    idx: I64 = 1
+    assert arr[idx] == 456
+test()
+"""
+
+    assert_run_success(fprime_test_api, seq)
+
+
 def test_modify_global_var_in_func(fprime_test_api):
     """Test that functions can modify top-level (global) variables"""
     seq = """
