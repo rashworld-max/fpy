@@ -93,9 +93,9 @@ from fpy.bytecode.directives import (
 )
 from fprime_gds.common.templates.ch_template import ChTemplate
 from fprime_gds.common.templates.prm_template import PrmTemplate
-from fprime.common.models.serialize.array_type import ArrayType as ArrayValue
-from fprime.common.models.serialize.bool_type import BoolType as BoolValue
-from fprime.common.models.serialize.numerical_types import (
+from fprime_gds.common.models.serialize.array_type import ArrayType as ArrayValue
+from fprime_gds.common.models.serialize.bool_type import BoolType as BoolValue
+from fprime_gds.common.models.serialize.numerical_types import (
     U8Type as U8Value,
     U64Type as U64Value,
     I32Type as I32Value,

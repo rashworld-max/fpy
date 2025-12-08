@@ -28,7 +28,7 @@ from fpy.bytecode.directives import (
 from fprime_gds.common.templates.ch_template import ChTemplate
 from fprime_gds.common.templates.cmd_template import CmdTemplate
 from fprime_gds.common.templates.prm_template import PrmTemplate
-from fprime.common.models.serialize.numerical_types import (
+from fprime_gds.common.models.serialize.numerical_types import (
     U8Type as U8Value,
     U16Type as U16Value,
     U32Type as U32Value,
@@ -43,7 +43,7 @@ from fprime.common.models.serialize.numerical_types import (
     FloatType as FloatValue,
     NumericalType as NumericalValue,
 )
-from fprime.common.models.serialize.string_type import StringType as StringValue
+from fprime_gds.common.models.serialize.string_type import StringType as StringValue
 from fpy.syntax import (
     AstBreak,
     AstContinue,
@@ -60,7 +60,7 @@ from fpy.syntax import (
     AstBlock,
     AstWhile,
 )
-from fprime.common.models.serialize.type_base import BaseType as FppValue
+from fprime_gds.common.models.serialize.type_base import BaseType as FppValue
 
 MAX_DIRECTIVES_COUNT = 1024
 MAX_DIRECTIVE_SIZE = 2048

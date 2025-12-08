@@ -10,8 +10,8 @@ from fpy.bytecode.directives import (
 from fpy.ir import Ir, IrIf, IrLabel
 from fpy.syntax import Ast
 from fpy.types import BuiltinSymbol, NothingValue
-from fprime.common.models.serialize.time_type import TimeType as TimeValue
-from fprime.common.models.serialize.numerical_types import (
+from fprime_gds.common.models.serialize.time_type import TimeType as TimeValue
+from fprime_gds.common.models.serialize.numerical_types import (
     U8Type as U8Value,
     U32Type as U32Value,
     I64Type as I64Value,
