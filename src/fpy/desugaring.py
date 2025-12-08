@@ -6,7 +6,7 @@ from fpy.syntax import (
     AstBinaryOp,
     AstFor,
     AstFuncCall,
-    AstTypeName,
+    AstTypeExpr,
     AstNumber,
     AstRange,
     AstVar,
@@ -62,7 +62,7 @@ class DesugarForLoops(Transformer):
             # create a new node for the type_ann
             loop_var_type_var = self.new(
                 state,
-                AstTypeName(None, [loop_var_type_name]),
+                AstTypeExpr(None, [loop_var_type_name]),
                 expr_converted_type=None,
                 expr_unconverted_type=None,
                 expr_converted_value=None,
@@ -104,7 +104,7 @@ class DesugarForLoops(Transformer):
         # create a new node for the type_ann
         loop_var_type_var = self.new(
             state,
-            AstTypeName(None, [loop_var_type_name]),
+            AstTypeExpr(None, [loop_var_type_name]),
             expr_converted_type=None,
             expr_unconverted_type=None,
             expr_converted_value=None,

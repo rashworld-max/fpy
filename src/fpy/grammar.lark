@@ -25,24 +25,24 @@ return_stmt: "return" [expr]
 
 # assignment
 
-assign: expr [":" type_name] "=" expr
+assign: expr [":" type_expr] "=" expr
 
-parameter: var ":" type_name ["=" expr]
+parameter: var ":" type_expr ["=" expr]
 parameters: parameter ("," parameter)*
-def_stmt: "def" var "(" [parameters] ")" ["->" type_name] ":" scoped_body
+def_stmt: "def" var "(" [parameters] ")" ["->" type_expr] ":" block
 
-# loops (cannot contain function definitions since they use body, not toplevel)
-for_stmt: "for" var "in" expr ":" body
-while_stmt: "while" expr ":" body
+# loops (cannot contain function definitions since they use stmt_list, not toplevel)
+for_stmt: "for" var "in" expr ":" stmt_list
+while_stmt: "while" expr ":" stmt_list
 
-# branching (cannot contain function definitions since they use body, not toplevel)
-if_stmt: "if" expr ":" body elifs ["else" ":" body]
+# branching (cannot contain function definitions since they use stmt_list, not toplevel)
+if_stmt: "if" expr ":" stmt_list elifs ["else" ":" stmt_list]
 elifs: elif_*
-elif_: "elif" expr ":" body
+elif_: "elif" expr ":" stmt_list
 
 # Bodies that cannot contain function definitions
-body: _NEWLINE _INDENT _stmt+ _DEDENT
-scoped_body: _NEWLINE _INDENT _stmt+ _DEDENT
+stmt_list: _NEWLINE _INDENT _stmt+ _DEDENT
+block: _NEWLINE _INDENT _stmt+ _DEDENT
 
 ?expr: _test
 
@@ -88,11 +88,11 @@ arguments: argument ("," argument)*
 
 # Qualified name for types (e.g., Fw.Time, Svc.DpRecord)
 # Used in type annotations and return types where only names are allowed
-type_name: name ("." name)*
+type_expr: name ("." name)*
 
 ?atom_expr: atom_expr "(" [arguments] ")" -> func_call
-          | atom_expr "[" expr "]" -> get_item
-          | atom_expr "." name -> get_attr
+          | atom_expr "[" expr "]" -> index_expr
+          | atom_expr "." name -> member_access
           | atom
 
 ?atom: _literal

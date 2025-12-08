@@ -8,7 +8,7 @@ from fpy.syntax import (
     AstLiteral,
     AstNumber,
     AstPass,
-    AstScopedBody,
+    AstBlock,
     AstString,
     AstVar,
 )
@@ -189,7 +189,7 @@ def test_transformer_deletes_nodes_from_lists():
     transformer = DropPassesTransformer()
     state = _make_state()
 
-    body = AstScopedBody(meta=None, stmts=[AstPass(meta=None), AstPass(meta=None)])
+    body = AstBlock(meta=None, stmts=[AstPass(meta=None), AstPass(meta=None)])
 
     transformer.run(body, state)
 
@@ -209,7 +209,7 @@ def test_transformer_expands_nodes_in_lists():
     state = _make_state()
 
     original = AstPass(meta=None)
-    body = AstScopedBody(meta=None, stmts=[original])
+    body = AstBlock(meta=None, stmts=[original])
 
     transformer.run(body, state)
 

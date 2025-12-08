@@ -108,19 +108,19 @@ from fpy.syntax import (
     Ast,
     AstAssert,
     AstBinaryOp,
-    AstBody,
+    AstStmtList,
     AstBreak,
     AstContinue,
     AstDef,
     AstExpr,
     AstFor,
-    AstGetAttr,
-    AstGetItem,
+    AstMemberAccess,
+    AstIndexExpr,
     AstLiteral,
     AstNodeWithSideEffects,
     AstReturn,
-    AstScopedBody,
-    AstScopedBody,
+    AstBlock,
+    AstBlock,
     AstIf,
     AstAssign,
     AstFuncCall,
@@ -137,7 +137,7 @@ class AssignVariableOffsets(Visitor):
     are known when generating function bodies that access them.
     """
 
-    def visit_AstScopedBody(self, node: AstScopedBody, state: CompileState):
+    def visit_AstBlock(self, node: AstBlock, state: CompileState):
         # Assign offsets to variables in this scope
         lvar_array_size_bytes = 0
         for name, ref in state.local_scopes[node].items():
@@ -392,7 +392,7 @@ class GenerateFunctionBody(Emitter):
         dirs.append(IntMultiplyDirective())
         return dirs
 
-    def emit_AstScopedBody(self, node: AstScopedBody, state: CompileState):
+    def emit_AstBlock(self, node: AstBlock, state: CompileState):
         dirs = []
         # Calculate lvar array size bytes (offsets already assigned by AssignVariableOffsets)
         lvar_array_size_bytes = 0
@@ -425,7 +425,7 @@ class GenerateFunctionBody(Emitter):
             dirs.extend(self.discard_expr_result(stmt, state))
         return dirs
 
-    def emit_AstBody(self, node: AstBody, state: CompileState):
+    def emit_AstStmtList(self, node: AstStmtList, state: CompileState):
         dirs = []
         for stmt in node.stmts:
             if not is_instance_compat(stmt, AstNodeWithSideEffects):
@@ -440,7 +440,7 @@ class GenerateFunctionBody(Emitter):
     def emit_AstIf(self, node: AstIf, state: CompileState):
         dirs = []
 
-        cases: list[tuple[AstExpr, AstBody]] = []
+        cases: list[tuple[AstExpr, AstStmtList]] = []
 
         cases.append((node.condition, node.body))
 
@@ -555,7 +555,7 @@ class GenerateFunctionBody(Emitter):
         # should have been desugared out
         assert False, node
 
-    def emit_AstGetItem(self, node: AstGetItem, state: CompileState):
+    def emit_AstIndexExpr(self, node: AstIndexExpr, state: CompileState):
         const_dirs = self.try_emit_expr_as_const(node, state)
         if const_dirs is not None:
             return const_dirs
@@ -626,7 +626,7 @@ class GenerateFunctionBody(Emitter):
 
         return dirs
 
-    def emit_AstGetAttr(self, node: AstGetAttr, state: CompileState):
+    def emit_AstMemberAccess(self, node: AstMemberAccess, state: CompileState):
         const_dirs = self.try_emit_expr_as_const(node, state)
         if const_dirs is not None:
             return const_dirs
@@ -978,7 +978,7 @@ class GenerateFunctionBody(Emitter):
 
 class GenerateModule(Emitter):
 
-    def emit_AstScopedBody(self, node: AstScopedBody, state: CompileState):
+    def emit_AstBlock(self, node: AstBlock, state: CompileState):
         if node is not state.root:
             return []
 

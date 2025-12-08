@@ -45,7 +45,7 @@ from fpy.semantics import (
     ResolveVars,
     WarnRangesAreNotEmpty,
 )
-from fpy.syntax import AstScopedBody, FpyTransformer, PythonIndenter
+from fpy.syntax import AstBlock, FpyTransformer, PythonIndenter
 from fpy.macros import MACROS
 from fpy.types import (
     SPECIFIC_NUMERIC_TYPES,
@@ -239,7 +239,7 @@ def get_base_compile_state(dictionary: str, compile_args: dict) -> CompileState:
 
 
 def ast_to_directives(
-    body: AstScopedBody,
+    body: AstBlock,
     dictionary: str,
     compile_args: dict | None = None,
 ) -> list[Directive] | CompileError | BackendError:
@@ -256,7 +256,7 @@ def ast_to_directives(
         # check that break/continue are in loops, and store which loop they're in
         CheckBreakAndContinueInLoop(),
         CheckReturnInFunc(),
-        # resolve type annotations first, since they use a restricted syntax (AstTypeName)
+        # resolve type annotations first, since they use a restricted syntax (AstTypeExpr)
         # and we need to know variable types before resolving other references
         ResolveTypeNames(),
         # resolve all variable and function references

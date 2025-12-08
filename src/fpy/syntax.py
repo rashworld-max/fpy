@@ -102,7 +102,7 @@ class AstVar(Ast):
 
 
 @dataclass
-class AstTypeName(Ast):
+class AstTypeExpr(Ast):
     """A qualified name like A.b.c - used for type annotations"""
     parts: list[str]
 
@@ -126,13 +126,13 @@ AstLiteral = Union[AstString, AstNumber, AstBoolean]
 
 
 @dataclass
-class AstGetAttr(Ast):
+class AstMemberAccess(Ast):
     parent: "AstExpr"
     attr: str
 
 
 @dataclass
-class AstGetItem(Ast):
+class AstIndexExpr(Ast):
     parent: "AstExpr"
     item: AstExpr
 
@@ -177,42 +177,42 @@ class AstRange(Ast):
 
 AstOp = Union[AstBinaryOp, AstUnaryOp]
 
-AstReference = Union[AstGetAttr, AstGetItem, AstVar]
+AstReference = Union[AstMemberAccess, AstIndexExpr, AstVar]
 AstExpr = Union[AstFuncCall, AstLiteral, AstReference, AstOp, AstRange]
 
 
 @dataclass
 class AstAssign(Ast):
     lhs: AstExpr
-    type_ann: AstTypeName | None
+    type_ann: AstTypeExpr | None
     rhs: AstExpr
 
 
 @dataclass
 class AstElif(Ast):
     condition: AstExpr
-    body: "AstBody"
+    body: "AstStmtList"
 
 
 @dataclass()
 class AstIf(Ast):
     condition: AstExpr
-    body: "AstBody"
+    body: "AstStmtList"
     elifs: list[AstElif]
-    els: Union["AstBody", None]
+    els: Union["AstStmtList", None]
 
 
 @dataclass
 class AstFor(Ast):
     loop_var: AstVar
     range: AstExpr
-    body: AstBody
+    body: AstStmtList
 
 
 @dataclass
 class AstWhile(Ast):
     condition: AstExpr
-    body: AstBody
+    body: AstStmtList
 
 
 @dataclass
@@ -241,9 +241,9 @@ class AstDef(Ast):
     name: AstVar
     # parameters is a list of (name, type, default_value) tuples
     # default_value is None if no default is provided
-    parameters: list[tuple[AstVar, AstTypeName, AstExpr | None]]
-    return_type: Union[AstTypeName, None]
-    body: AstScopedBody
+    parameters: list[tuple[AstVar, AstTypeExpr, AstExpr | None]]
+    return_type: Union[AstTypeExpr, None]
+    body: AstBlock
 
 
 AstStmt = Union[
@@ -279,12 +279,12 @@ AstNodeWithSideEffects = Union[
 
 
 @dataclass
-class AstBody(Ast):
+class AstStmtList(Ast):
     stmts: list[AstStmt]
 
 
 @dataclass
-class AstScopedBody(Ast):
+class AstBlock(Ast):
     stmts: list[AstStmt]
 
 
@@ -336,14 +336,14 @@ def handle_parameter(meta, args):
 
 @v_args(meta=True, inline=True)
 class FpyTransformer(Transformer):
-    input = no_inline(AstScopedBody)
+    input = no_inline(AstBlock)
     pass_stmt = AstPass
 
     assign = AstAssign
 
     for_stmt = AstFor
     while_stmt = AstWhile
-    scoped_body = no_inline(AstScopedBody)
+    block = no_inline(AstBlock)
     break_stmt = AstBreak
     continue_stmt = AstContinue
 
@@ -352,7 +352,7 @@ class FpyTransformer(Transformer):
     if_stmt = AstIf
     elifs = no_inline_or_meta(list)
     elif_ = AstElif
-    body = no_inline(AstBody)
+    stmt_list = no_inline(AstStmtList)
     binary_op = AstBinaryOp
     unary_op = AstUnaryOp
 
@@ -369,12 +369,12 @@ class FpyTransformer(Transformer):
     number = AstNumber
     boolean = AstBoolean
     name = no_meta(str)
-    get_attr = AstGetAttr
-    get_item = AstGetItem
+    member_access = AstMemberAccess
+    index_expr = AstIndexExpr
     var = AstVar
     range = AstRange
 
-    type_name = no_inline(AstTypeName)
+    type_expr = no_inline(AstTypeExpr)
 
     def_stmt = AstDef
     parameter = no_inline(handle_parameter)

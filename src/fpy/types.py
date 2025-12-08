@@ -51,13 +51,13 @@ from fpy.syntax import (
     AstExpr,
     AstFor,
     AstFuncCall,
-    AstTypeName,
+    AstTypeExpr,
     AstOp,
     AstReference,
     Ast,
     AstAssign,
     AstReturn,
-    AstScopedBody,
+    AstBlock,
     AstWhile,
 )
 from fprime.common.models.serialize.type_base import BaseType as FppValue
@@ -316,7 +316,7 @@ class VariableSymbol:
     """a mutable, typed value stored on the stack referenced by an unqualified name"""
 
     name: str
-    type_ref: AstTypeName | None
+    type_ref: AstTypeExpr | None
     """the expression denoting the var's type"""
     declaration: Ast
     """the node where this var is declared"""
@@ -485,8 +485,8 @@ class CompileState:
         )
 
     next_node_id: int = 0
-    root: AstScopedBody = None
-    scope_parents: dict[AstScopedBody, AstScopedBody | None] = field(
+    root: AstBlock = None
+    scope_parents: dict[AstBlock, AstBlock | None] = field(
         default_factory=dict, repr=False
     )
     """map of a scoped body node to the parent scoped body node it should use"""

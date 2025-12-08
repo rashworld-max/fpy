@@ -80,7 +80,7 @@ from fprime.common.models.serialize.bool_type import BoolType as BoolValue
 from fpy.syntax import (
     AstAssert,
     AstBinaryOp,
-    AstBody,
+    AstStmtList,
     AstBoolean,
     AstBreak,
     AstContinue,
@@ -88,21 +88,21 @@ from fpy.syntax import (
     AstElif,
     AstExpr,
     AstFor,
-    AstGetAttr,
-    AstGetItem,
-    AstTypeName,
+    AstMemberAccess,
+    AstIndexExpr,
+    AstTypeExpr,
     AstNamedArgument,
     AstNumber,
     AstPass,
     AstRange,
     AstReference,
     AstReturn,
-    AstScopedBody,
+    AstBlock,
     AstStmt,
     AstStmtWithExpr,
     AstString,
     Ast,
-    AstScopedBody,
+    AstBlock,
     AstLiteral,
     AstIf,
     AstAssign,
@@ -133,7 +133,7 @@ class SetLocalScope(Visitor):
 
 class AssignLocalScopes(TopDownVisitor):
 
-    def visit_AstScopedBody(self, node: AstScopedBody, state: CompileState):
+    def visit_AstBlock(self, node: AstBlock, state: CompileState):
         if node is not state.root:
             # only handle the root node this way
             return
@@ -234,7 +234,7 @@ class CreateVariablesAndFuncs(TopDownVisitor):
             # or loop_var has been declared before and we only know the type, but have no type expr
 
             # case 1 is easy, just check the type == LoopVarType
-            # case 2 is harder, we have to check if the type expr is an AstTypeName with a single part
+            # case 2 is harder, we have to check if the type expr is an AstTypeExpr with a single part
             # that matches the canonical name of the LoopVarType
 
             # the alternative to this is that we do some primitive type resolution in the same pass as variable creation
@@ -243,7 +243,7 @@ class CreateVariablesAndFuncs(TopDownVisitor):
             if (loop_var.type_ref is None and loop_var.type != LoopVarType) or (
                 loop_var.type is None
                 and not (
-                    isinstance(loop_var.type_ref, AstTypeName)
+                    isinstance(loop_var.type_ref, AstTypeExpr)
                     and loop_var.type_ref.parts == [LoopVarType.get_canonical_name()]
                 )
             ):
@@ -375,13 +375,13 @@ class CheckReturnInFunc(TopDownVisitor):
 
 class ResolveTypeNames(TopDownVisitor):
     """
-    Resolves type annotations (AstTypeName) to actual types.
+    Resolves type annotations (AstTypeExpr) to actual types.
     This runs before ResolveVars so that variable types are known
     when we start resolving references.
     """
 
     def resolve_type_name(
-        self, node: AstTypeName, state: CompileState
+        self, node: AstTypeExpr, state: CompileState
     ) -> type | None:
         """
         Fully resolves a type name to the actual type.
@@ -529,7 +529,7 @@ class ResolveVars(TopDownVisitor):
         state: CompileState,
     ) -> FpyCallable | None:
         """
-        Finishes resolving a function reference (AstVar/AstGetAttr chain) to a callable.
+        Finishes resolving a function reference (AstVar/AstMemberAccess chain) to a callable.
         The root AstVar should already be resolved by try_resolve_root_ref.
         Returns None if the reference could not be resolved (error already reported).
         """
@@ -540,7 +540,7 @@ class ResolveVars(TopDownVisitor):
             expect_callable=True for the final node (must be FpyCallable),
             expect_callable=False for intermediate nodes (must be dict/namespace).
             """
-            if not is_instance_compat(n, (AstVar, AstGetAttr)):
+            if not is_instance_compat(n, (AstVar, AstMemberAccess)):
                 state.err("Unknown function", n)
                 return None
 
@@ -555,7 +555,7 @@ class ResolveVars(TopDownVisitor):
                     return None
                 return resolved
 
-            # It's an AstGetAttr - resolve the parent first (always expecting a namespace)
+            # It's an AstMemberAccess - resolve the parent first (always expecting a namespace)
             parent_scope = resolve(n.parent, expect_callable=False)
             if parent_scope is None:
                 return None
@@ -678,7 +678,7 @@ class ResolveVars(TopDownVisitor):
             state.err("Unknown symbol", node)
             return
 
-    def visit_AstGetItem(self, node: AstGetItem, state: CompileState):
+    def visit_AstIndexExpr(self, node: AstIndexExpr, state: CompileState):
         if not self.try_resolve_root_ref(
             node.item, state.runtime_values, "value", state
         ):
@@ -722,8 +722,8 @@ class ResolveVars(TopDownVisitor):
         ):
             return
 
-    def visit_AstLiteral_AstGetAttr(
-        self, node: Union[AstLiteral, AstGetAttr], state: CompileState
+    def visit_AstLiteral_AstMemberAccess(
+        self, node: Union[AstLiteral, AstMemberAccess], state: CompileState
     ):
         # don't need to do anything for literals or getattr, but just have this here for completion's sake
         # the reason we don't need to do anything for getattr is because the point of this
@@ -1042,7 +1042,7 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
 
         return result_type
 
-    def visit_AstGetAttr(self, node: AstGetAttr, state: CompileState):
+    def visit_AstMemberAccess(self, node: AstMemberAccess, state: CompileState):
         parent_ref = state.resolved_references.get(node.parent)
 
         if is_instance_compat(parent_ref, (type, FpyCallable)):
@@ -1117,7 +1117,7 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
         state.expr_unconverted_types[node] = ref_type
         state.expr_converted_types[node] = ref_type
 
-    def visit_AstGetItem(self, node: AstGetItem, state: CompileState):
+    def visit_AstIndexExpr(self, node: AstIndexExpr, state: CompileState):
         parent_ref = state.resolved_references.get(node.parent)
 
         if is_instance_compat(parent_ref, (type, FpyCallable, dict)):
@@ -1697,7 +1697,7 @@ class CalculateConstExprValues(Visitor):
 
         state.expr_converted_values[node] = expr_value
 
-    def visit_AstGetAttr(self, node: AstGetAttr, state: CompileState):
+    def visit_AstMemberAccess(self, node: AstMemberAccess, state: CompileState):
         unconverted_type = state.expr_unconverted_types[node]
         converted_type = state.expr_converted_types[node]
         ref = state.resolved_references[node]
@@ -1757,7 +1757,7 @@ class CalculateConstExprValues(Visitor):
                 return
         state.expr_converted_values[node] = expr_value
 
-    def visit_AstGetItem(self, node: AstGetItem, state: CompileState):
+    def visit_AstIndexExpr(self, node: AstIndexExpr, state: CompileState):
         ref = state.resolved_references[node]
         # get item can only be a field reference
         assert is_instance_compat(ref, FieldReference), ref
@@ -2103,7 +2103,7 @@ class CheckAllBranchesReturn(Visitor):
     def visit_AstReturn(self, node: AstReturn, state: CompileState):
         state.does_return[node] = True
 
-    def visit_AstBody(self, node: Union[AstBody, AstScopedBody], state: CompileState):
+    def visit_AstStmtList(self, node: Union[AstStmtList, AstBlock], state: CompileState):
         state.does_return[node] = any(state.does_return[n] for n in node.stmts)
 
     def visit_AstIf(self, node: AstIf, state: CompileState):
@@ -2159,7 +2159,7 @@ class CheckFunctionReturns(Visitor):
 
 
 class CheckConstArrayAccesses(Visitor):
-    def visit_AstGetItem(self, node: AstGetItem, state: CompileState):
+    def visit_AstIndexExpr(self, node: AstIndexExpr, state: CompileState):
         # if the index is a const, we should be able to check if it's in bounds
         idx_value = state.expr_converted_values.get(node.item)
         if idx_value is None:
