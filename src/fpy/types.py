@@ -265,13 +265,13 @@ class CastSymbol(CallableSymbol):
 
 
 @dataclass
-class FieldReference:
+class FieldSymbol:
     """a reference to a member/element of an fprime struct/array type"""
 
     parent_expr: AstExpr
     """the complete qualifier"""
-    base_ref: "Symbol"
-    """the base symbol, up through all the layers of field refs"""
+    base_sym: Union["Symbol", None]
+    """the base symbol, up through all the layers of field symbols, or None if parent at some point is not a symbol at all"""
     type: FppType
     """the fprime type of this reference"""
     is_struct_member: bool = False
@@ -279,7 +279,7 @@ class FieldReference:
     is_array_element: bool = False
     """True if this is an array element reference"""
     base_offset: int = None
-    """the constant offset in the base ref type, or None if unknown at compile time"""
+    """the constant offset in the base symbol type, or None if unknown at compile time"""
     local_offset: int = None
     """the constant offset in the parent type at which to find this field
     or None if unknown at compile time"""
@@ -420,7 +420,7 @@ Symbol = typing.Union[
     CallableSymbol,
     FppType,
     VariableSymbol,
-    FieldReference,
+    FieldSymbol,
     SymbolTable
 ]
 """a named entity in fpy that can be looked up in a symbol table"""
@@ -482,7 +482,7 @@ class CompileState:
 
     enclosing_funcs: dict[AstReturn, AstDef] = field(default_factory=dict)
 
-    resolved_references: dict[AstReference, Symbol] = field(
+    resolved_symbols: dict[AstReference, Symbol] = field(
         default_factory=dict, repr=False
     )
     """reference to its singular resolution"""

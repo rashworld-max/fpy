@@ -12,7 +12,7 @@ from fpy.types import (
     SPECIFIC_NUMERIC_TYPES,
     UNSIGNED_INTEGER_TYPES,
     CompileState,
-    FieldReference,
+    FieldSymbol,
     ForLoopAnalysis,
     FppType,
     CallableSymbol,
@@ -407,7 +407,7 @@ class ResolveTypeNames(TopDownVisitor):
             state.err("Unknown type", node)
             return None
 
-        state.resolved_references[node] = resolved
+        state.resolved_symbols[node] = resolved
         return resolved
 
     def visit_AstDef(self, node: AstDef, state: CompileState):
@@ -478,7 +478,7 @@ class ResolveVars(TopDownVisitor):
             local_scope = state.scope_parents[local_scope]
 
         if resolved is not None:
-            state.resolved_references[node] = resolved
+            state.resolved_symbols[node] = resolved
         return resolved
 
     def try_resolve_root_ref(
@@ -491,7 +491,7 @@ class ResolveVars(TopDownVisitor):
     ) -> bool:
         """
         recursively tries to resolve the root of a reference. if any node in the chain is not a reference, return True.
-        Otherwise recurse up the ref until you find the root, and try resolving
+        Otherwise recurse up the sym until you find the root, and try resolving
         it in the local scope, and then in the given global scope. Return False if couldn't be resolved in local and global
         """
         if not is_instance_compat(node, AstReference):
@@ -520,7 +520,7 @@ class ResolveVars(TopDownVisitor):
             state.err(f"Unknown {global_scope_name}", node)
             return False
 
-        state.resolved_references[node] = resolved
+        state.resolved_symbols[node] = resolved
         return True
 
     def finish_resolving_func(
@@ -545,7 +545,7 @@ class ResolveVars(TopDownVisitor):
                 return None
 
             if is_instance_compat(n, AstVar):
-                resolved = state.resolved_references.get(n)
+                resolved = state.resolved_symbols.get(n)
                 if resolved is None:
                     state.err("Unknown function", n)
                     return None
@@ -570,7 +570,7 @@ class ResolveVars(TopDownVisitor):
                 state.err("Unknown function", n)
                 return None
 
-            state.resolved_references[n] = resolved
+            state.resolved_symbols[n] = resolved
             return resolved
 
         return resolve(node, expect_callable=True)
@@ -671,7 +671,7 @@ class ResolveVars(TopDownVisitor):
         # any of the other places that it could. it must be alone on its line
         # this is a strange choice by the dev but rule of thumb says start
         # by allowing everything, then add warnings later
-        if node in state.resolved_references:
+        if node in state.resolved_symbols:
             return
 
         if self.resolve_local_name(node, state) is None:
@@ -751,7 +751,7 @@ class CheckUseBeforeDeclare(Visitor):
             # definitely not a declaration, it's a field assignment
             return
 
-        var = state.resolved_references[node.lhs]
+        var = state.resolved_symbols[node.lhs]
 
         if var is None or var.declaration != node:
             # either not declared in this scope, or this is not a
@@ -763,22 +763,22 @@ class CheckUseBeforeDeclare(Visitor):
         self.currently_declared_vars.append(var)
 
     def visit_AstVar(self, node: AstVar, state: CompileState):
-        ref = state.resolved_references[node]
-        if not is_instance_compat(ref, VariableSymbol):
+        sym = state.resolved_symbols[node]
+        if not is_instance_compat(sym, VariableSymbol):
             # not a variable, might be a type name or smth
             return
 
-        if is_instance_compat(ref.declaration, (AstFor, AstDef)):
+        if is_instance_compat(sym.declaration, (AstFor, AstDef)):
             # this will be handled by other pass, or not needed for checks
             return
         if (
-            is_instance_compat(ref.declaration, AstAssign)
-            and ref.declaration.lhs == node
+            is_instance_compat(sym.declaration, AstAssign)
+            and sym.declaration.lhs == node
         ):
             # this is the initial name of the variable. don't crash
             return
 
-        if ref not in self.currently_declared_vars:
+        if sym not in self.currently_declared_vars:
             state.err(f"'{node.var}' used before declared", node)
             return
 
@@ -789,8 +789,8 @@ class EnsureVariableNotReferenced(Visitor):
         self.var = var
 
     def visit_AstVar(self, node: AstVar, state: CompileState):
-        ref = state.resolved_references[node]
-        if ref == self.var:
+        sym = state.resolved_symbols[node]
+        if sym == self.var:
             state.err(f"'{node.var}' used before declared", node)
             return
 
@@ -802,29 +802,29 @@ class CheckUseBeforeDeclareForLoopVariables(TopDownVisitor):
         self.currently_declared_vars: list[VariableSymbol] = []
 
     def visit_AstFor(self, node: AstFor, state: CompileState):
-        var = state.resolved_references[node.loop_var]
+        var = state.resolved_symbols[node.loop_var]
 
         self.currently_declared_vars.append(var)
         # also double check that the loop var isn't referenced in the range
         EnsureVariableNotReferenced(var).run(node.range, state)
 
     def visit_AstVar(self, node: AstVar, state: CompileState):
-        ref = state.resolved_references[node]
-        if not is_instance_compat(ref, VariableSymbol):
+        sym = state.resolved_symbols[node]
+        if not is_instance_compat(sym, VariableSymbol):
             # not a variable, might be a type name or smth
             return
 
-        if is_instance_compat(ref.declaration, (AstAssign, AstDef)):
+        if is_instance_compat(sym.declaration, (AstAssign, AstDef)):
             # handled by prev pass or not needed to check
             return
         if (
-            is_instance_compat(ref.declaration, AstFor)
-            and ref.declaration.loop_var == node
+            is_instance_compat(sym.declaration, AstFor)
+            and sym.declaration.loop_var == node
         ):
             # this is the initial name of the variable. don't crash
             return
 
-        if ref not in self.currently_declared_vars:
+        if sym not in self.currently_declared_vars:
             state.err(f"'{node.var}' used before declared", node)
             return
 
@@ -1011,77 +1011,77 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
             member_list.append(("useconds", U32Value))
         return member_list
 
-    def get_ref_type(self, ref: Symbol) -> FppType:
-        """returns the fprime type of the ref, if it were to be evaluated as an expression"""
-        if isinstance(ref, ChTemplate):
-            result_type = ref.ch_type_obj
-        elif isinstance(ref, PrmTemplate):
-            result_type = ref.prm_type_obj
-        elif isinstance(ref, FppValue):
+    def get_sym_type(self, sym: Symbol) -> FppType:
+        """returns the fprime type of the sym, if it were to be evaluated as an expression"""
+        if isinstance(sym, ChTemplate):
+            result_type = sym.ch_type_obj
+        elif isinstance(sym, PrmTemplate):
+            result_type = sym.prm_type_obj
+        elif isinstance(sym, FppValue):
             # constant value
-            result_type = type(ref)
-        elif isinstance(ref, CallableSymbol):
+            result_type = type(sym)
+        elif isinstance(sym, CallableSymbol):
             # a reference to a callable isn't a type in and of itself
             # it has a return type but you have to call it (with an AstFuncCall)
             # consider making a separate "reference" type
             result_type = NothingValue
-        elif isinstance(ref, VariableSymbol):
-            result_type = ref.type
-        elif isinstance(ref, type):
+        elif isinstance(sym, VariableSymbol):
+            result_type = sym.type
+        elif isinstance(sym, type):
             # a reference to a type doesn't have a value, and so doesn't have a type,
             # in and of itself. if this were a function call to the type's ctor then
             # it would have a value and thus a type
             result_type = NothingValue
-        elif isinstance(ref, FieldReference):
-            result_type = ref.type
-        elif isinstance(ref, dict):
+        elif isinstance(sym, FieldSymbol):
+            result_type = sym.type
+        elif isinstance(sym, dict):
             # reference to a scope. scopes don't have values
             result_type = NothingValue
         else:
-            assert False, ref
+            assert False, sym
 
         return result_type
 
     def visit_AstMemberAccess(self, node: AstMemberAccess, state: CompileState):
-        parent_ref = state.resolved_references.get(node.parent)
+        parent_sym = state.resolved_symbols.get(node.parent)
 
-        if is_instance_compat(parent_ref, (type, CallableSymbol)):
+        if is_instance_compat(parent_sym, (type, CallableSymbol)):
             state.err("Unknown attribute", node)
             return
 
-        ref = None
-        if is_instance_compat(parent_ref, dict):
+        sym = None
+        if is_instance_compat(parent_sym, dict):
             # getattr of a namespace
             # parent won't actually have a type
-            ref = parent_ref.get(node.attr)
-            if ref is None:
+            sym = parent_sym.get(node.attr)
+            if sym is None:
                 state.err("Unknown attribute", node)
                 return
             # GetAttr should never resolve to a lexical variable; variables are accessed directly
             assert not is_instance_compat(
-                ref, VariableSymbol
+                sym, VariableSymbol
             ), "Field resolution unexpectedly found a local variable"
         else:
             # in all other cases, parent has at least some sort of type
-            # ref may be None (if parent is some complex expr), or it may be
+            # sym may be None (if parent is some complex expr), or it may be
             # a tlm chan or var or etc...
             # it may or may not have a compile time value, but it definitely has a type
             parent_type = state.expr_unconverted_types[node.parent]
 
-            # field references store their "base reference", which is the first non-field-ref parent of
-            # the field ref. this lets you easily check what actual underlying thing (tlm chan, variable, prm)
+            # field symbols store their "base symbol", which is the first non-field-symbol parent of
+            # the field symbol. this lets you easily check what actual underlying thing (tlm chan, variable, prm)
             # you're talking about a field of
-            base_ref = (
-                parent_ref
-                if not is_instance_compat(parent_ref, FieldReference)
-                else parent_ref.base_ref
+            base_sym = (
+                parent_sym
+                if not is_instance_compat(parent_sym, FieldSymbol)
+                else parent_sym.base_sym
             )
-            # we also calculate a "base offset" wrt. the start of the base_ref type, so you
-            # can easily pick out this field from a value of the base ref type
+            # we also calculate a "base offset" wrt. the start of the base_sym type, so you
+            # can easily pick out this field from a value of the base sym type
             base_offset = (
                 0
-                if not is_instance_compat(parent_ref, FieldReference)
-                else parent_ref.base_offset
+                if not is_instance_compat(parent_sym, FieldSymbol)
+                else parent_sym.base_offset
             )
 
             member_list = self.get_members(node, parent_type, state)
@@ -1091,11 +1091,11 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
             offset = 0
             for arg_name, arg_type in member_list:
                 if arg_name == node.attr:
-                    ref = FieldReference(
+                    sym = FieldSymbol(
                         is_struct_member=True,
                         parent_expr=node.parent,
                         type=arg_type,
-                        base_ref=base_ref,
+                        base_sym=base_sym,
                         local_offset=offset,
                         base_offset=base_offset,
                         name=arg_name,
@@ -1104,23 +1104,23 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
                 offset += arg_type.getMaxSize()
                 base_offset += arg_type.getMaxSize()
 
-        if ref is None:
+        if sym is None:
             state.err(
                 f"{typename(parent_type)} has no member named {node.attr}",
                 node,
             )
             return
 
-        ref_type = self.get_ref_type(ref)
+        sym_type = self.get_sym_type(sym)
 
-        state.resolved_references[node] = ref
-        state.expr_unconverted_types[node] = ref_type
-        state.expr_converted_types[node] = ref_type
+        state.resolved_symbols[node] = sym
+        state.expr_unconverted_types[node] = sym_type
+        state.expr_converted_types[node] = sym_type
 
     def visit_AstIndexExpr(self, node: AstIndexExpr, state: CompileState):
-        parent_ref = state.resolved_references.get(node.parent)
+        parent_sym = state.resolved_symbols.get(node.parent)
 
-        if is_instance_compat(parent_ref, (type, CallableSymbol, dict)):
+        if is_instance_compat(parent_sym, (type, CallableSymbol, dict)):
             state.err("Unknown item", node)
             return
 
@@ -1143,33 +1143,33 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
         if not self.coerce_expr_type(node.item, ArrayIndexType, state):
             return
 
-        base_ref = (
-            parent_ref
-            if not is_instance_compat(parent_ref, FieldReference)
-            else parent_ref.base_ref
+        base_sym = (
+            parent_sym
+            if not is_instance_compat(parent_sym, FieldSymbol)
+            else parent_sym.base_sym
         )
 
-        ref = FieldReference(
+        sym = FieldSymbol(
             is_array_element=True,
             parent_expr=node.parent,
             type=parent_type.MEMBER_TYPE,
-            base_ref=base_ref,
+            base_sym=base_sym,
             idx_expr=node.item,
         )
 
-        state.resolved_references[node] = ref
+        state.resolved_symbols[node] = sym
         state.expr_unconverted_types[node] = parent_type.MEMBER_TYPE
         state.expr_converted_types[node] = parent_type.MEMBER_TYPE
 
     def visit_AstVar(self, node: AstVar, state: CompileState):
         # already been resolved by SetScopes pass
-        ref = state.resolved_references[node]
-        if ref is None:
+        sym = state.resolved_symbols[node]
+        if sym is None:
             return
-        ref_type = self.get_ref_type(ref)
+        sym_type = self.get_sym_type(sym)
 
-        state.expr_unconverted_types[node] = ref_type
-        state.expr_converted_types[node] = ref_type
+        state.expr_unconverted_types[node] = sym_type
+        state.expr_converted_types[node] = sym_type
 
     def visit_AstNumber(self, node: AstNumber, state: CompileState):
         # give a best guess as to the final type of this node. we don't actually know
@@ -1370,11 +1370,11 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
         return
 
     def visit_AstFuncCall(self, node: AstFuncCall, state: CompileState):
-        func = state.resolved_references.get(node.func)
+        func = state.resolved_symbols.get(node.func)
         if func is None:
             # if it were a reference to a callable, it would have already been resolved
-            # if it were a ref to smth else, it would have already errored
-            # so it's not even a ref, just some expr
+            # if it were a symbol to something else, it would have already errored
+            # so it's not even a symbol, just some expr
             state.err(f"Unknown function", node.func)
             return
         node_args = node.args if node.args else []
@@ -1435,19 +1435,19 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
     def visit_AstAssign(self, node: AstAssign, state: CompileState):
         # should be present in resolved refs because we only let it through if
         # variable is attr, item or var
-        lhs_ref = state.resolved_references[node.lhs]
-        if not is_instance_compat(lhs_ref, (VariableSymbol, FieldReference)):
+        lhs_sym = state.resolved_symbols[node.lhs]
+        if not is_instance_compat(lhs_sym, (VariableSymbol, FieldSymbol)):
             # assigning to a scope or something
             state.err("Invalid assignment", node.lhs)
             return
 
         lhs_type = None
-        if is_instance_compat(lhs_ref, VariableSymbol):
-            lhs_type = lhs_ref.type
+        if is_instance_compat(lhs_sym, VariableSymbol):
+            lhs_type = lhs_sym.type
         else:
             # reference to a field. make sure that the field is a field of
             # a variable and not like a field of some tlm chan (we can't modify tlm)
-            if not is_instance_compat(lhs_ref.base_ref, VariableSymbol):
+            if not is_instance_compat(lhs_sym.base_sym, VariableSymbol):
                 state.err("Can only assign variables", node.lhs)
                 return
             assert (
@@ -1485,7 +1485,7 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
         if node.parameters is None:
             return
 
-        func = state.resolved_references[node.name]
+        func = state.resolved_symbols[node.name]
         if not is_instance_compat(func, FunctionSymbol):
             return
 
@@ -1499,7 +1499,7 @@ class PickTypesAndResolveAttrsAndItems(Visitor):
 
     def visit_AstReturn(self, node: AstReturn, state: CompileState):
         func = state.enclosing_funcs[node]
-        func = state.resolved_references[func.name]
+        func = state.resolved_symbols[func.name]
         if func.return_type is NothingValue and node.value is not None:
             state.err("Expected no return value", node.value)
             return
@@ -1700,9 +1700,9 @@ class CalculateConstExprValues(Visitor):
     def visit_AstMemberAccess(self, node: AstMemberAccess, state: CompileState):
         unconverted_type = state.expr_unconverted_types[node]
         converted_type = state.expr_converted_types[node]
-        ref = state.resolved_references[node]
+        sym = state.resolved_symbols[node]
         expr_value = None
-        if is_instance_compat(ref, (type, dict, CallableSymbol)):
+        if is_instance_compat(sym, (type, dict, CallableSymbol)):
             # these types have no value
             state.expr_converted_values[node] = NothingValue()
             assert unconverted_type == converted_type, (
@@ -1710,13 +1710,13 @@ class CalculateConstExprValues(Visitor):
                 converted_type,
             )
             return
-        elif is_instance_compat(ref, (ChTemplate, PrmTemplate, VariableSymbol)):
+        elif is_instance_compat(sym, (ChTemplate, PrmTemplate, VariableSymbol)):
             # has a value but won't try to calc at compile time
             state.expr_converted_values[node] = None
             return
-        elif is_instance_compat(ref, FppValue):
-            expr_value = ref
-        elif is_instance_compat(ref, FieldReference):
+        elif is_instance_compat(sym, FppValue):
+            expr_value = sym
+        elif is_instance_compat(sym, FieldSymbol):
             parent_value = state.expr_converted_values[node.parent]
             if parent_value is None:
                 # no compile time constant value for our parent here
@@ -1758,9 +1758,9 @@ class CalculateConstExprValues(Visitor):
         state.expr_converted_values[node] = expr_value
 
     def visit_AstIndexExpr(self, node: AstIndexExpr, state: CompileState):
-        ref = state.resolved_references[node]
-        # get item can only be a field reference
-        assert is_instance_compat(ref, FieldReference), ref
+        sym = state.resolved_symbols[node]
+        # index expression can only be a field symbol
+        assert is_instance_compat(sym, FieldSymbol), sym
 
         parent_value = state.expr_converted_values[node.parent]
 
@@ -1800,9 +1800,9 @@ class CalculateConstExprValues(Visitor):
     def visit_AstVar(self, node: AstVar, state: CompileState):
         unconverted_type = state.expr_unconverted_types[node]
         converted_type = state.expr_converted_types[node]
-        ref = state.resolved_references[node]
+        sym = state.resolved_symbols[node]
         expr_value = None
-        if is_instance_compat(ref, (type, dict, CallableSymbol)):
+        if is_instance_compat(sym, (type, dict, CallableSymbol)):
             # these types have no value
             state.expr_converted_values[node] = NothingValue()
             assert unconverted_type == converted_type, (
@@ -1810,7 +1810,7 @@ class CalculateConstExprValues(Visitor):
                 converted_type,
             )
             return
-        elif is_instance_compat(ref, (ChTemplate, PrmTemplate, VariableSymbol)):
+        elif is_instance_compat(sym, (ChTemplate, PrmTemplate, VariableSymbol)):
             # Has a value but we don't try to calculate it at compile time.
             # NOTE: If you ever add const-folding for VariableSymbol here, you must also
             # update CalculateDefaultArgConstValues. That pass runs CalculateConstExprValues
@@ -1819,10 +1819,10 @@ class CalculateConstExprValues(Visitor):
             # be available yet, and the default value will incorrectly be rejected as non-const.
             state.expr_converted_values[node] = None
             return
-        elif is_instance_compat(ref, FppValue):
-            expr_value = ref
-        elif is_instance_compat(ref, FieldReference):
-            assert False, ref
+        elif is_instance_compat(sym, FppValue):
+            expr_value = sym
+        elif is_instance_compat(sym, FieldSymbol):
+            assert False, sym
 
         assert expr_value is not None
 
@@ -1841,7 +1841,7 @@ class CalculateConstExprValues(Visitor):
         state.expr_converted_values[node] = expr_value
 
     def visit_AstFuncCall(self, node: AstFuncCall, state: CompileState):
-        func = state.resolved_references[node.func]
+        func = state.resolved_symbols[node.func]
         assert is_instance_compat(func, CallableSymbol)
 
         # Use resolved args from semantic analysis (already in positional order,

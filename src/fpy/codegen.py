@@ -22,7 +22,7 @@ from fpy.types import (
     UNSIGNED_INTEGER_TYPES,
     CompileState,
     Emitter,
-    FieldReference,
+    FieldSymbol,
     FppType,
     CastSymbol,
     CommandSymbol,
@@ -140,22 +140,22 @@ class AssignVariableOffsets(Visitor):
     def visit_AstBlock(self, node: AstBlock, state: CompileState):
         # Assign offsets to variables in this scope
         lvar_array_size_bytes = 0
-        for name, ref in state.local_scopes[node].items():
-            if not is_instance_compat(ref, VariableSymbol):
+        for name, sym in state.local_scopes[node].items():
+            if not is_instance_compat(sym, VariableSymbol):
                 # doesn't require space to be allocated
                 continue
-            if ref.frame_offset is not None:
+            if sym.frame_offset is not None:
                 # Already has an offset (e.g., function argument or global)
                 continue
             # Assign new offset
-            ref.frame_offset = lvar_array_size_bytes
-            lvar_array_size_bytes += ref.type.getMaxSize()
+            sym.frame_offset = lvar_array_size_bytes
+            lvar_array_size_bytes += sym.type.getMaxSize()
 
     def visit_AstDef(self, node: AstDef, state: CompileState):
         # Assign offsets for function arguments (negative offsets before frame start)
         # The args come before the call frame header (return addr + prev frame ptr)
         # so they have negative offsets relative to the function's stack frame start
-        func = state.resolved_references[node.name]
+        func = state.resolved_symbols[node.name]
         if func.args is None or len(func.args) == 0:
             # no args
             return
@@ -185,7 +185,7 @@ class GenerateFunctions(Visitor):
         entry_label = state.func_entry_labels[node]
         code = [entry_label]
         code.extend(GenerateFunctionBody().emit(node.body, state))
-        func = state.resolved_references[node.name]
+        func = state.resolved_symbols[node.name]
         if func.return_type is NothingValue and not state.does_return[node.body]:
             arg_bytes = sum(arg[1].getMaxSize() for arg in (func.args or []))
             code.append(ReturnDirective(0, arg_bytes))
@@ -350,7 +350,7 @@ class GenerateFunctionBody(Emitter):
         self, node: Ast, idx_expr: AstExpr, array_type: FppType, state: CompileState
     ) -> list[Directive | Ir]:
         """generates code to push to stack the U64 byte offset in the array for an array access, while performing an array oob
-        check. idx_expr is the expression to calculate the index, and dest is the FieldReference containing info about the
+        check. idx_expr is the expression to calculate the index, and dest is the FieldSymbol containing info about the
         dest array"""
         dirs = []
         # let's push the offset of base lvar first, then
@@ -396,18 +396,18 @@ class GenerateFunctionBody(Emitter):
         dirs = []
         # Calculate lvar array size bytes (offsets already assigned by AssignVariableOffsets)
         lvar_array_size_bytes = 0
-        for name, ref in state.local_scopes[node].items():
-            if not is_instance_compat(ref, VariableSymbol):
+        for name, sym in state.local_scopes[node].items():
+            if not is_instance_compat(sym, VariableSymbol):
                 # doesn't require space to be allocated
                 continue
-            if ref.frame_offset < 0:
+            if sym.frame_offset < 0:
                 # function argument (negative)
                 continue
-            if ref.is_global and self.in_function:
+            if sym.is_global and self.in_function:
                 # Global variable accessed from inside a function - already allocated at top level
                 continue
             # Track the max offset to know how much space to allocate
-            end_of_var = ref.frame_offset + ref.type.getMaxSize()
+            end_of_var = sym.frame_offset + sym.type.getMaxSize()
             if end_of_var > lvar_array_size_bytes:
                 lvar_array_size_bytes = end_of_var
 
@@ -538,7 +538,7 @@ class GenerateFunctionBody(Emitter):
 
     def emit_AstReturn(self, node: AstReturn, state: CompileState):
         enclosing_func = state.enclosing_funcs[node]
-        enclosing_func = state.resolved_references[enclosing_func.name]
+        enclosing_func = state.resolved_symbols[enclosing_func.name]
         func_args_size = sum(arg[1].getMaxSize() for arg in enclosing_func.args)
 
         if node.value is not None:
@@ -559,9 +559,9 @@ class GenerateFunctionBody(Emitter):
         const_dirs = self.try_emit_expr_as_const(node, state)
         if const_dirs is not None:
             return const_dirs
-        ref = state.resolved_references[node]
+        sym = state.resolved_symbols[node]
 
-        assert is_instance_compat(ref, FieldReference), ref
+        assert is_instance_compat(sym, FieldSymbol), sym
 
         # use the unconverted for this expr for now, because we haven't run conversion
         unconverted_type = state.expr_unconverted_types[node]
@@ -607,17 +607,17 @@ class GenerateFunctionBody(Emitter):
         if const_dirs is not None:
             return const_dirs
 
-        ref = state.resolved_references.get(node)
+        sym = state.resolved_symbols.get(node)
 
-        assert is_instance_compat(ref, VariableSymbol), ref
+        assert is_instance_compat(sym, VariableSymbol), sym
 
         # Use global directives only when inside a function AND accessing a global variable
         # At top level, stack_frame_start = 0, so local and global offsets are the same
-        use_global = self.in_function and ref.is_global
+        use_global = self.in_function and sym.is_global
         if use_global:
-            dirs = [LoadGlobalDirective(ref.frame_offset, ref.type.getMaxSize())]
+            dirs = [LoadGlobalDirective(sym.frame_offset, sym.type.getMaxSize())]
         else:
-            dirs = [LoadLocalDirective(ref.frame_offset, ref.type.getMaxSize())]
+            dirs = [LoadLocalDirective(sym.frame_offset, sym.type.getMaxSize())]
 
         unconverted_type = state.expr_unconverted_types[node]
         converted_type = state.expr_converted_types[node]
@@ -631,10 +631,10 @@ class GenerateFunctionBody(Emitter):
         if const_dirs is not None:
             return const_dirs
 
-        ref = state.resolved_references.get(node)
+        sym = state.resolved_symbols.get(node)
 
-        if is_instance_compat(ref, dict):
-            # don't generate code for it, it's a ref to a scope and
+        if is_instance_compat(sym, dict):
+            # don't generate code for it, it's a reference to a scope and
             # doesn't have a value
             return []
 
@@ -643,27 +643,27 @@ class GenerateFunctionBody(Emitter):
 
         dirs = []
 
-        if is_instance_compat(ref, ChTemplate):
-            dirs.append(PushTlmValDirective(ref.get_id()))
-        elif is_instance_compat(ref, PrmTemplate):
-            dirs.append(PushPrmDirective(ref.get_id()))
-        elif is_instance_compat(ref, VariableSymbol):
+        if is_instance_compat(sym, ChTemplate):
+            dirs.append(PushTlmValDirective(sym.get_id()))
+        elif is_instance_compat(sym, PrmTemplate):
+            dirs.append(PushPrmDirective(sym.get_id()))
+        elif is_instance_compat(sym, VariableSymbol):
             # Use global directives only when inside a function AND accessing a global variable
-            use_global = self.in_function and ref.is_global
+            use_global = self.in_function and sym.is_global
             if use_global:
                 dirs.append(
-                    LoadGlobalDirective(ref.frame_offset, ref.type.getMaxSize())
+                    LoadGlobalDirective(sym.frame_offset, sym.type.getMaxSize())
                 )
             else:
-                dirs.append(LoadLocalDirective(ref.frame_offset, ref.type.getMaxSize()))
-        elif is_instance_compat(ref, FieldReference):
+                dirs.append(LoadLocalDirective(sym.frame_offset, sym.type.getMaxSize()))
+        elif is_instance_compat(sym, FieldSymbol):
             # okay, put parent dirs in first
-            dirs.extend(self.emit(ref.parent_expr, state))
-            assert ref.local_offset is not None
+            dirs.extend(self.emit(sym.parent_expr, state))
+            assert sym.local_offset is not None
             # use the converted type of parent
-            parent_type = state.expr_converted_types[ref.parent_expr]
+            parent_type = state.expr_converted_types[sym.parent_expr]
             # push the offset to the stack
-            dirs.append(PushValDirective(StackSizeType(ref.local_offset).serialize()))
+            dirs.append(PushValDirective(StackSizeType(sym.local_offset).serialize()))
             dirs.append(
                 GetFieldDirective(
                     parent_type.getMaxSize(), unconverted_type.getMaxSize()
@@ -672,7 +672,7 @@ class GenerateFunctionBody(Emitter):
         else:
             assert (
                 False
-            ), ref  # ref should either be impossible to put on stack or should have a compile time val
+            ), sym  # sym should either be impossible to put on stack or should have a compile time val
 
         converted_type = state.expr_converted_types[node]
         if converted_type != unconverted_type:
@@ -790,7 +790,7 @@ class GenerateFunctionBody(Emitter):
             return const_dirs
 
         node_args = node.args if node.args is not None else []
-        func = state.resolved_references[node.func]
+        func = state.resolved_symbols[node.func]
         dirs = []
         if is_instance_compat(func, CommandSymbol):
             const_args = not any(
@@ -855,7 +855,7 @@ class GenerateFunctionBody(Emitter):
         return dirs
 
     def emit_AstAssign(self, node: AstAssign, state: CompileState):
-        lhs = state.resolved_references[node.lhs]
+        lhs = state.resolved_symbols[node.lhs]
 
         const_frame_offset = -1
         is_global_var = False
@@ -865,15 +865,15 @@ class GenerateFunctionBody(Emitter):
             assert const_frame_offset is not None, lhs
         else:
             # okay now push the lvar arr offset to stack
-            assert is_instance_compat(lhs, FieldReference), lhs
-            assert is_instance_compat(lhs.base_ref, VariableSymbol), lhs.base_ref
-            is_global_var = lhs.base_ref.is_global
+            assert is_instance_compat(lhs, FieldSymbol), lhs
+            assert is_instance_compat(lhs.base_sym, VariableSymbol), lhs.base_sym
+            is_global_var = lhs.base_sym.is_global
 
             # is the lvar array offset a constant?
             # okay, are we assigning to a member or an element?
             if lhs.is_struct_member:
                 # if it's a struct, then the lvar offset is always constant
-                const_frame_offset = lhs.base_offset + lhs.base_ref.frame_offset
+                const_frame_offset = lhs.base_offset + lhs.base_sym.frame_offset
             else:
                 assert lhs.is_array_element
                 # again, offset is the offset in base type + offset of base lvar
@@ -888,7 +888,7 @@ class GenerateFunctionBody(Emitter):
                     # okay, so we have a constant value index
                     lhs_parent_type = state.expr_converted_types[lhs.parent_expr]
                     const_frame_offset = (
-                        lhs.base_ref.frame_offset
+                        lhs.base_sym.frame_offset
                         + const_idx_expr_value.val
                         * lhs_parent_type.MEMBER_TYPE.getMaxSize()
                     )
@@ -917,7 +917,7 @@ class GenerateFunctionBody(Emitter):
         else:
             # okay we don't know the offset at compile time
             # only one case where that can be:
-            assert is_instance_compat(lhs, FieldReference) and lhs.is_array_element, lhs
+            assert is_instance_compat(lhs, FieldSymbol) and lhs.is_array_element, lhs
 
             # we need to calculate absolute offset in lvar array
             # == (parent offset) + (offset in parent)
@@ -932,7 +932,7 @@ class GenerateFunctionBody(Emitter):
 
             # parent offset:
             dirs.append(
-                PushValDirective(U64Value(lhs.base_ref.frame_offset).serialize())
+                PushValDirective(U64Value(lhs.base_sym.frame_offset).serialize())
             )
 
             # add them

@@ -45,7 +45,7 @@ class DesugarForLoops(Transformer):
         state.expr_unconverted_types[node] = expr_unconverted_type
         state.expr_converted_values[node] = expr_converted_value
         state.op_intermediate_types[node] = op_intermediate_type
-        state.resolved_references[node] = resolved_symbol
+        state.resolved_symbols[node] = resolved_symbol
         return node
 
     def initialize_loop_var(
@@ -113,7 +113,7 @@ class DesugarForLoops(Transformer):
         )
 
         # assign ub to ub var
-        # not an expr, not a ref
+        # not an expr, not a symbol
         return self.new(
             state,
             AstAssign(
@@ -167,7 +167,7 @@ class DesugarForLoops(Transformer):
     ) -> Ast:
         # <node.loop_var> = <node.loop_var> + 1
 
-        # create a new loop var ref for use in lhs of loop var inc
+        # create a new loop var symbol for use in lhs of loop var inc
         lhs = self.new(
             state,
             AstVar(None, loop_info.loop_var.name),
@@ -194,7 +194,7 @@ class DesugarForLoops(Transformer):
         self, state: CompileState, loop_node: AstFor, loop_info: ForLoopAnalysis
     ) -> Ast:
         # <node.loop_var> < $upper_bound_var
-        # create a new loop var ref for use in lhs
+        # create a new loop var symbol for use in lhs
         lhs = self.new(
             state,
             AstVar(None, loop_info.loop_var.name),
