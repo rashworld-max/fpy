@@ -313,10 +313,6 @@ class ForLoopAnalysis:
     upper_bound_var: VariableSymbol
     reuse_existing_loop_var: bool
     
-@dataclass
-class FuncDefAnalysis:
-    func: FunctionSymbol
-
 
 next_symbol_table_id = 0
 

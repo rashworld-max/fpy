@@ -1,4 +1,5 @@
 from pathlib import Path
+import tempfile
 import traceback
 import fpy.error
 from fpy.model import DirectiveErrorCode, FpySequencerModel
@@ -9,6 +10,8 @@ from fprime_gds.common.loaders.cmd_json_loader import CmdJsonLoader
 from fprime_gds.common.loaders.event_json_loader import EventJsonLoader
 from fprime_gds.common.loaders.prm_json_loader import PrmJsonLoader
 from fprime_gds.common.testing_fw.api import IntegrationTestAPI
+
+from fpy.types import serialize_directives
 
 default_dictionary = str(
     Path(__file__).parent.parent.parent
@@ -78,6 +81,11 @@ def run_seq(
     """Run a list of directives using the sequencer model."""
     if tlm is None:
         tlm = {}
+
+    # seq_file = tempfile.NamedTemporaryFile(suffix=".bin", delete=False)
+    # Path(seq_file.name).write_bytes(serialize_directives(directives)[0])
+    # fprime_test_api.send_and_assert_command("Ref.cmdSeq.RUN", [seq_file.name, "BLOCK"], timeout=4)
+    # return
 
     dictionary = default_dictionary
 

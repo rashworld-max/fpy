@@ -25,7 +25,6 @@ from fpy.types import (
     VariableSymbol,
     FpyIntegerValue,
     FpyStringValue,
-    FuncDefAnalysis,
     NothingValue,
     RangeValue,
     TopDownVisitor,
