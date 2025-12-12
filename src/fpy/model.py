@@ -300,14 +300,16 @@ class FpySequencerModel:
             return DirectiveErrorCode.STACK_OVERFLOW
 
         self.stack += bytearray(0 for i in range(0, dir.size))
+        return None
 
     def handle_no_op(self, dir: NoOpDirective):
-        pass
+        return None
 
     def handle_pop_discard(self, dir: DiscardDirective):
         if len(self.stack) < dir.size:
             return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
         self.pop(size=dir.size, type=bytes)
+        return None
 
     def handle_load_local(self, dir: LoadLocalDirective):
         if len(self.stack) + dir.size > self.max_stack_size:
@@ -323,6 +325,7 @@ class FpySequencerModel:
             + dir.lvar_offset : (self.stack_frame_start + dir.lvar_offset + dir.size)
         ]
         self.push(value)
+        return None
 
     def handle_load_global(self, dir: LoadGlobalDirective):
         """Load a value from a global variable (absolute offset from start of stack)"""
@@ -336,6 +339,7 @@ class FpySequencerModel:
 
         value = self.stack[dir.global_offset : (dir.global_offset + dir.size)]
         self.push(value)
+        return None
 
     def handle_store_local(self, dir: StoreLocalDirective):
 
@@ -356,6 +360,7 @@ class FpySequencerModel:
         # put into lvar array at the given offset
         for i in range(0, len(value)):
             self.stack[lvar_offset + self.stack_frame_start + i] = value[i]
+        return None
 
     def handle_store_global(self, dir: StoreGlobalDirective):
         """Store a value to a global variable (absolute offset popped from stack)"""
@@ -376,6 +381,7 @@ class FpySequencerModel:
         # put into stack at the given absolute offset
         for i in range(0, len(value)):
             self.stack[global_offset + i] = value[i]
+        return None
 
     def handle_store_local_const_offset(self, dir: StoreLocalConstOffsetDirective):
         if len(self.stack) < dir.size:
@@ -393,6 +399,7 @@ class FpySequencerModel:
         # put into lvar array at the given offset
         for i in range(0, len(value)):
             self.stack[dir.lvar_offset + self.stack_frame_start + i] = value[i]
+        return None
 
     def handle_store_global_const_offset(self, dir: StoreGlobalConstOffsetDirective):
         """Store a value to a global variable at a constant absolute offset"""
@@ -411,11 +418,13 @@ class FpySequencerModel:
         # put into stack at the given absolute offset
         for i in range(0, len(value)):
             self.stack[dir.global_offset + i] = value[i]
+        return None
 
     def handle_push_val(self, dir: PushValDirective):
         if len(self.stack) + 8 > self.max_stack_size:
             return DirectiveErrorCode.STACK_OVERFLOW
         self.push(dir.val)
+        return None
 
     def handle_wait_rel(self, dir: WaitRelDirective):
         if len(self.stack) < 8:
@@ -427,6 +436,7 @@ class FpySequencerModel:
         assert useconds < 1000000, useconds
 
         print("wait rel", seconds, useconds)
+        return None
 
     def handle_wait_abs(self, dir: WaitAbsDirective):
         if len(self.stack) < 11:
@@ -439,6 +449,7 @@ class FpySequencerModel:
         assert useconds < 1000000, useconds
 
         print("wait abs", time_context, time_base, seconds, useconds)
+        return None
 
     def handle_const_cmd(self, dir: ConstCmdDirective):
         print("cmd opcode", dir.cmd_opcode, "args", dir.args)
@@ -446,6 +457,7 @@ class FpySequencerModel:
         if not self.validate_cmd(dir.cmd_opcode, dir.args):
             raise RuntimeError("Invalid cmd")
         self.push(0, size=1)
+        return None
 
     def handle_stack_cmd(self, dir: StackCmdDirective):
         if len(self.stack) < dir.args_size + FwOpcodeType.getMaxSize():
@@ -467,11 +479,13 @@ class FpySequencerModel:
             raise RuntimeError("Invalid cmd")
         # always push CmdResponse.OK
         self.push(0, size=1)
+        return None
 
     def handle_goto(self, dir: GotoDirective):
         if dir.dir_idx > len(self.dirs):
             return DirectiveErrorCode.STMT_OUT_OF_BOUNDS
         self.next_dir_idx = dir.dir_idx
+        return None
 
     def handle_if(self, dir: IfDirective):
         if dir.false_goto_dir_index > len(self.dirs):
@@ -481,6 +495,7 @@ class FpySequencerModel:
         conditional = self.pop(type=bool, size=1)
         if not conditional:
             self.next_dir_idx = dir.false_goto_dir_index
+        return None
 
     def handle_push_tlm_val(self, dir: PushTlmValDirective):
         whole_value: bytearray = self.tlm_db.get(dir.chan_id)
@@ -491,6 +506,7 @@ class FpySequencerModel:
             return DirectiveErrorCode.STACK_OVERFLOW
 
         self.push(whole_value)
+        return None
 
     def handle_push_prm(self, dir: PushPrmDirective):
         whole_value: bytearray = self.prm_db.get(dir.prm_id)
@@ -501,6 +517,7 @@ class FpySequencerModel:
             return DirectiveErrorCode.STACK_OVERFLOW
 
         self.push(whole_value)
+        return None
 
     def handle_or(self, dir: OrDirective):
         if len(self.stack) < 2:
@@ -508,6 +525,7 @@ class FpySequencerModel:
         rhs = self.pop(type=bool, size=1)
         lhs = self.pop(type=bool, size=1)
         self.push(lhs or rhs)
+        return None
 
     def handle_and(self, dir: AndDirective):
         if len(self.stack) < 2:
@@ -515,16 +533,19 @@ class FpySequencerModel:
         rhs = self.pop(type=bool, size=1)
         lhs = self.pop(type=bool, size=1)
         self.push(lhs and rhs)
+        return None
 
     def handle_ieq(self, dir: IntEqualDirective):
         if len(self.stack) < 16:
             return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
         self.push(self.pop() == self.pop())
+        return None
 
     def handle_ine(self, dir: IntNotEqualDirective):
         if len(self.stack) < 16:
             return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
         self.push(self.pop() != self.pop())
+        return None
 
     def handle_ult(self, dir: UnsignedLessThanDirective):
         if len(self.stack) < 16:
@@ -532,6 +553,7 @@ class FpySequencerModel:
         rhs = self.pop(signed=False)
         lhs = self.pop(signed=False)
         self.push(lhs < rhs)
+        return None
 
     def handle_ule(self, dir: UnsignedLessThanOrEqualDirective):
         if len(self.stack) < 16:
@@ -539,6 +561,7 @@ class FpySequencerModel:
         rhs = self.pop(signed=False)
         lhs = self.pop(signed=False)
         self.push(lhs <= rhs)
+        return None
 
     def handle_ugt(self, dir: UnsignedGreaterThanDirective):
         if len(self.stack) < 16:
@@ -546,6 +569,7 @@ class FpySequencerModel:
         rhs = self.pop(signed=False)
         lhs = self.pop(signed=False)
         self.push(lhs > rhs)
+        return None
 
     def handle_uge(self, dir: UnsignedGreaterThanOrEqualDirective):
         if len(self.stack) < 16:
@@ -553,6 +577,7 @@ class FpySequencerModel:
         rhs = self.pop(signed=False)
         lhs = self.pop(signed=False)
         self.push(lhs >= rhs)
+        return None
 
     def handle_slt(self, dir: SignedLessThanDirective):
         if len(self.stack) < 16:
@@ -561,6 +586,7 @@ class FpySequencerModel:
         lhs = self.pop()
         print(lhs, rhs)
         self.push(lhs < rhs)
+        return None
 
     def handle_sle(self, dir: SignedLessThanOrEqualDirective):
         if len(self.stack) < 16:
@@ -568,6 +594,7 @@ class FpySequencerModel:
         rhs = self.pop()
         lhs = self.pop()
         self.push(lhs <= rhs)
+        return None
 
     def handle_sgt(self, dir: SignedGreaterThanDirective):
         if len(self.stack) < 16:
@@ -575,6 +602,7 @@ class FpySequencerModel:
         rhs = self.pop()
         lhs = self.pop()
         self.push(lhs > rhs)
+        return None
 
     def handle_sge(self, dir: SignedGreaterThanOrEqualDirective):
         if len(self.stack) < 16:
@@ -582,6 +610,7 @@ class FpySequencerModel:
         rhs = self.pop()
         lhs = self.pop()
         self.push(lhs >= rhs)
+        return None
 
     def handle_feq(self, dir: FloatEqualDirective):
         if len(self.stack) < 16:
@@ -589,11 +618,13 @@ class FpySequencerModel:
         rhs = self.pop(type=float)
         lhs = self.pop(type=float)
         self.push(lhs == rhs)
+        return None
 
     def handle_fne(self, dir: FloatNotEqualDirective):
         if len(self.stack) < 16:
             return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
         self.push(self.pop(type=float) != self.pop(type=float))
+        return None
 
     def handle_flt(self, dir: FloatLessThanDirective):
         if len(self.stack) < 16:
@@ -601,6 +632,7 @@ class FpySequencerModel:
         rhs = self.pop(type=float)
         lhs = self.pop(type=float)
         self.push(lhs < rhs)
+        return None
 
     def handle_fle(self, dir: FloatLessThanOrEqualDirective):
         if len(self.stack) < 16:
@@ -608,6 +640,7 @@ class FpySequencerModel:
         rhs = self.pop(type=float)
         lhs = self.pop(type=float)
         self.push(lhs <= rhs)
+        return None
 
     def handle_fgt(self, dir: FloatGreaterThanDirective):
         if len(self.stack) < 16:
@@ -615,6 +648,7 @@ class FpySequencerModel:
         rhs = self.pop(type=float)
         lhs = self.pop(type=float)
         self.push(lhs > rhs)
+        return None
 
     def handle_fge(self, dir: FloatGreaterThanOrEqualDirective):
         if len(self.stack) < 16:
@@ -622,6 +656,7 @@ class FpySequencerModel:
         rhs = self.pop(type=float)
         lhs = self.pop(type=float)
         self.push(lhs >= rhs)
+        return None
 
     def handle_not(self, dir: NotDirective):
         if len(self.stack) < 1:
@@ -631,6 +666,7 @@ class FpySequencerModel:
             self.push(False)
         else:
             self.push(True)
+        return None
 
     def handle_fpext(self, dir: FloatExtendDirective):
         if len(self.stack) < 4:
@@ -640,6 +676,7 @@ class FpySequencerModel:
         val_as_float = struct.unpack(">f", val_bytes)[0]
 
         self.push(val_as_float)
+        return None
 
     def handle_siext_8_64(self, dir: IntegerSignedExtend8To64Directive):
         if len(self.stack) < 1:
@@ -651,6 +688,7 @@ class FpySequencerModel:
         val = self.pop(type=int, signed=True, size=1)
 
         self.push(val, signed=True, size=8)
+        return None
 
     def handle_siext_16_64(self, dir: IntegerSignedExtend16To64Directive):
         if len(self.stack) < 2:
@@ -662,6 +700,7 @@ class FpySequencerModel:
         val = self.pop(type=int, signed=True, size=2)
 
         self.push(val, signed=True, size=8)
+        return None
 
     def handle_siext_32_64(self, dir: IntegerSignedExtend32To64Directive):
         if len(self.stack) < 4:
@@ -673,6 +712,7 @@ class FpySequencerModel:
         val = self.pop(type=int, signed=True, size=4)
 
         self.push(val, signed=True, size=8)
+        return None
 
     def handle_ziext_8_64(self, dir: IntegerZeroExtend8To64Directive):
         if len(self.stack) < 1:
@@ -684,6 +724,7 @@ class FpySequencerModel:
         val = self.pop(type=int, signed=False, size=1)
 
         self.push(val, signed=False, size=8)
+        return None
 
     def handle_ziext_16_64(self, dir: IntegerZeroExtend16To64Directive):
         if len(self.stack) < 2:
@@ -695,6 +736,7 @@ class FpySequencerModel:
         val = self.pop(type=int, signed=False, size=2)
 
         self.push(val, signed=False, size=8)
+        return None
 
     def handle_ziext_32_64(self, dir: IntegerZeroExtend32To64Directive):
         if len(self.stack) < 4:
@@ -706,6 +748,7 @@ class FpySequencerModel:
         val = self.pop(type=int, signed=False, size=4)
 
         self.push(val, signed=False, size=8)
+        return None
 
     def handle_fptrunc(self, dir: FloatTruncateDirective):
         if len(self.stack) < 8:
@@ -713,6 +756,7 @@ class FpySequencerModel:
         val_64 = self.pop(type=float)
         val_32_bytes = struct.pack(">f", val_64)
         self.push(val_32_bytes)
+        return None
 
     def handle_itrunc_64_8(self, dir: IntegerTruncate64To8Directive):
         if len(self.stack) < 8:
@@ -721,6 +765,7 @@ class FpySequencerModel:
         val = self.pop(type=bytes, size=8)
         val = val[-1:]
         self.push(val)
+        return None
 
     def handle_itrunc_64_16(self, dir: IntegerTruncate64To16Directive):
         if len(self.stack) < 8:
@@ -729,6 +774,7 @@ class FpySequencerModel:
         val = self.pop(type=bytes, size=8)
         val = val[-2:]
         self.push(val)
+        return None
 
     def handle_itrunc_64_32(self, dir: IntegerTruncate64To32Directive):
         if len(self.stack) < 8:
@@ -737,30 +783,35 @@ class FpySequencerModel:
         val = self.pop(type=bytes, size=8)
         val = val[-4:]
         self.push(val)
+        return None
 
     def handle_fptosi(self, dir: FloatToSignedIntDirective):
         if len(self.stack) < 8:
             return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
         val = self.pop(type=float)
         self.push(int(val))
+        return None
 
     def handle_fptoui(self, dir: FloatToUnsignedIntDirective):
         if len(self.stack) < 8:
             return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
         val = self.pop(type=float)
         self.push(int(val), signed=False)
+        return None
 
     def handle_sitofp(self, dir: SignedIntToFloatDirective):
         if len(self.stack) < 8:
             return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
         val = self.pop()
         self.push(float(val))
+        return None
 
     def handle_uitofp(self, dir: UnsignedIntToFloatDirective):
         if len(self.stack) < 8:
             return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
         val = self.pop(signed=False)
         self.push(float(val))
+        return None
 
     def handle_iadd(self, dir: IntAddDirective):
         if len(self.stack) < 16:
@@ -768,6 +819,7 @@ class FpySequencerModel:
         rhs = self.pop()
         lhs = self.pop()
         self.push(overflow_check(lhs + rhs))
+        return None
 
     def handle_isub(self, dir: IntSubtractDirective):
         if len(self.stack) < 16:
@@ -775,6 +827,7 @@ class FpySequencerModel:
         rhs = self.pop()
         lhs = self.pop()
         self.push(overflow_check(lhs - rhs))
+        return None
 
     def handle_imul(self, dir: IntMultiplyDirective):
         if len(self.stack) < 16:
@@ -782,6 +835,7 @@ class FpySequencerModel:
         rhs = self.pop()
         lhs = self.pop()
         self.push(overflow_check(lhs * rhs))
+        return None
 
     def handle_udiv(self, dir: UnsignedIntDivideDirective):
         if len(self.stack) < 16:
@@ -801,6 +855,7 @@ class FpySequencerModel:
         # For division, overflow detection isn't typically done with the mask on the result
         # because the quotient itself is within range
         self.push(python_quotient)
+        return None
 
     def handle_sdiv(self, dir: SignedIntDivideDirective):
         if len(self.stack) < 16:
@@ -822,6 +877,7 @@ class FpySequencerModel:
         python_quotient = int(lhs / rhs)
 
         self.push(python_quotient)
+        return None
 
     def handle_fadd(self, dir: FloatAddDirective):
         if len(self.stack) < 16:
@@ -829,6 +885,7 @@ class FpySequencerModel:
         rhs = self.pop(type=float)
         lhs = self.pop(type=float)
         self.push(lhs + rhs)
+        return None
 
     def handle_fsub(self, dir: FloatSubtractDirective):
         if len(self.stack) < 16:
@@ -836,6 +893,7 @@ class FpySequencerModel:
         rhs = self.pop(type=float)
         lhs = self.pop(type=float)
         self.push(lhs - rhs)
+        return None
 
     def handle_fmul(self, dir: FloatMultiplyDirective):
         if len(self.stack) < 16:
@@ -843,6 +901,7 @@ class FpySequencerModel:
         rhs = self.pop(type=float)
         lhs = self.pop(type=float)
         self.push(lhs * rhs)
+        return None
 
     def handle_fdiv(self, dir: FloatDivideDirective):
         if len(self.stack) < 16:
@@ -850,6 +909,7 @@ class FpySequencerModel:
         rhs = self.pop(type=float)
         lhs = self.pop(type=float)
         self.push(lhs / rhs)
+        return None
 
     def handle_smod(self, dir: SignedModuloDirective):
         if len(self.stack) < 16:
@@ -857,6 +917,7 @@ class FpySequencerModel:
         rhs = self.pop(signed=True)
         lhs = self.pop(signed=True)
         self.push(lhs % rhs, signed=True)
+        return None
 
     def handle_umod(self, dir: UnsignedModuloDirective):
         if len(self.stack) < 16:
@@ -864,6 +925,7 @@ class FpySequencerModel:
         rhs = self.pop(signed=False)
         lhs = self.pop(signed=False)
         self.push(lhs % rhs, signed=False)
+        return None
 
     def handle_fmod(self, dir: FloatModuloDirective):
         if len(self.stack) < 16:
@@ -871,6 +933,7 @@ class FpySequencerModel:
         rhs = self.pop(type=float)
         lhs = self.pop(type=float)
         self.push(lhs % rhs)
+        return None
 
     def handle_fpow(self, dir: FloatExponentDirective):
         if len(self.stack) < 16:
@@ -878,12 +941,14 @@ class FpySequencerModel:
         rhs = self.pop(type=float)
         lhs = self.pop(type=float)
         self.push(lhs**rhs)
+        return None
 
     def handle_log(self, dir: FloatLogDirective):
         if len(self.stack) < 8:
             return DirectiveErrorCode.STACK_ACCESS_OUT_OF_BOUNDS
         operand = self.pop(type=float)
         self.push(math.log(operand))
+        return None
 
     def handle_exit(self, dir: ExitDirective):
         if len(self.stack) < 1:
@@ -892,6 +957,7 @@ class FpySequencerModel:
         print(exit_code)
         if exit_code == 0:
             self.next_dir_idx = len(self.dirs)
+            return None
         else:
             return DirectiveErrorCode.EXIT_WITH_ERROR
 
@@ -902,6 +968,7 @@ class FpySequencerModel:
         rhs = self.pop(type=bytes, size=dir.size)
         lhs = self.pop(type=bytes, size=dir.size)
         self.push(rhs == lhs)
+        return None
 
     def handle_get_field(self, dir: GetFieldDirective):
         if len(self.stack) < dir.parent_size:
@@ -918,6 +985,7 @@ class FpySequencerModel:
         member = parent[offset : (offset + dir.member_size)]
 
         self.push(member)
+        return None
 
     def handle_peek(self, dir: PeekDirective):
         if len(self.stack) < 8:
@@ -935,12 +1003,14 @@ class FpySequencerModel:
         stop = len(self.stack) - offset
         bytes = self.stack[start:stop]
         self.push(bytes)
+        return None
 
     def handle_push_time(self, dir: PushTimeDirective):
         if len(self.stack) + TimeValue.getMaxSize() > self.max_stack_size:
             return DirectiveErrorCode.STACK_OVERFLOW
 
         self.push(TimeValue(0, 0, 0, 0).serialize())
+        return None
 
     def handle_call(self, dir: CallDirective):
         if len(self.stack) < StackSizeType.getMaxSize():
@@ -959,6 +1029,7 @@ class FpySequencerModel:
         self.push(self.stack_frame_start, size=StackSizeType.getMaxSize(), signed=False)
         # update lvar array start to be end of current stack
         self.stack_frame_start = len(self.stack)
+        return None
 
     def handle_return(self, dir: ReturnDirective):
         # Check that return value (if any) can be popped from current frame
@@ -995,3 +1066,4 @@ class FpySequencerModel:
         # and push return value if one exists
         if dir.return_val_size > 0:
             self.push(return_val)
+        return None
