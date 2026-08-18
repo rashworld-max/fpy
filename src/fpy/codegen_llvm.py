@@ -56,14 +56,17 @@ from fpy.syntax import (
     UnaryStackOp,
 )
 from fpy.bytecode.directives import FwOpcodeType
-from fpy.semantics import is_cmd_and_response_unhandled
+from fpy.semantics import is_cmd_and_response_unhandled, is_type_constant_size
 import fpy.types
 from fpy.types import (
     CMD_RESPONSE,
     ChDef,
     FpyType,
     FpyValue,
+    PARAM_VALID,
     PrmDef,
+    TIME,
+    TLM_VALID,
     TypeKind,
     is_instance_compat,
 )
@@ -73,6 +76,8 @@ from fpy.wasm_host import (
     HOST_CMD_FUNC_NAME,
     HOST_EXIT_FUNC_NAME,
     HOST_PANIC_FUNC_NAME,
+    HOST_PRM_FUNC_NAME,
+    HOST_TLM_FUNC_NAME,
     declare_host_imports,
 )
 
@@ -94,7 +99,6 @@ class CommandBuffer:
     memory."""
 
     buf: "ir.GlobalVariable"
-    size: int
     runtime_args: list[tuple[int, AstExpr, FpyType]]
     """the arguments not known at compile time, as (byte offset of the zeroed
     slot the buffer leaves for it, argument expression, argument type)"""
@@ -117,8 +121,31 @@ class LlvmBackendState(BackendState):
     cmd_buffers: dict[AstFuncCall, CommandBuffer] = field(default_factory=dict)
     """command call to the buffer it dispatches"""
 
+    tlm_prm_buffer: "ir.GlobalVariable | None" = None
+    """the buffer every telemetry-channel and parameter read shares, sized to
+    the largest value any read receives: a read deserializes the buffer into
+    a typed value immediately after the host call fills it, with no other
+    host exchange in between, so no two reads ever need it at once"""
+
+    tlm_time_buffer: "ir.GlobalVariable | None" = None
+    """the buffer every telemetry read hands the host for the value's
+    Fw.Time, which the language has no way to observe yet"""
+
     funcs: dict[AstDef, "ir.Function"] = field(default_factory=dict)
     """used function definition to the LLVM function it lowers to"""
+
+
+def create_byte_buffer(
+    module: "ir.Module", name: str, contents: bytearray
+) -> "ir.GlobalVariable":
+    """Create a module-level [N x i8] buffer in linear memory, initialized to
+    *contents* and named uniquely after *name*, for exchanging serialized
+    values with the host."""
+    buf_type = ir.ArrayType(ir.IntType(8), len(contents))
+    buf = ir.GlobalVariable(module, buf_type, name=module.get_unique_name(name))
+    buf.linkage = "private"
+    buf.initializer = ir.Constant(buf_type, contents)
+    return buf
 
 
 def is_addressable(expr: AstExpr, state: CompileState) -> bool:
@@ -354,13 +381,22 @@ class EmitLlvmExpr(Emitter):
             if is_float
             else b.icmp_signed("==", rhs, zero)
         )
-        fail_block = b.function.append_basic_block("div_zero")
-        ok_block = b.function.append_basic_block("div_ok")
-        b.cbranch(is_zero, fail_block, ok_block)
+        self._emit_fault_when(is_zero, DirectiveErrorCode.DOMAIN_ERROR, "div")
+
+    def _emit_fault_when(
+        self, bad: ir.Value, code: DirectiveErrorCode, name: str
+    ) -> None:
+        """Fault with *code* through the host panic import when the i1 *bad*
+        holds, and otherwise continue emission in a fresh basic block (named
+        after *name*)."""
+        b = self.builder
+        fail_block = b.function.append_basic_block(name + "_bad")
+        ok_block = b.function.append_basic_block(name + "_ok")
+        b.cbranch(bad, fail_block, ok_block)
         b.position_at_end(fail_block)
         b.call(
             b.module.globals[HOST_PANIC_FUNC_NAME],
-            [ir.Constant(ERROR_CODE_TYPE, DirectiveErrorCode.DOMAIN_ERROR.value)],
+            [ir.Constant(ERROR_CODE_TYPE, code.value)],
         )
         b.unreachable()
         b.position_at_end(ok_block)
@@ -424,9 +460,7 @@ class EmitLlvmExpr(Emitter):
     def emit_AstGetAttr(self, node: AstGetAttr, state: CompileState) -> ir.Value:
         sym = state.resolved_symbols[node]
         if is_instance_compat(sym, (ChDef, PrmDef)):
-            raise BackendError(
-                "LLVM backend can't read telemetry channels or parameters yet"
-            )
+            return self._emit_tlm_prm_read(node, sym, state)
         # A qualified name can't denote a variable (an imported sequence may
         # not declare a top-level variable), so what remains is member access.
         assert is_instance_compat(sym, FieldAccess), sym
@@ -456,6 +490,54 @@ class EmitLlvmExpr(Emitter):
         idx = idx_value.val
         assert 0 <= idx < len(sym.parent_expr.elements), f"Index {idx} out of bounds"
         return self.emit(sym.parent_expr.elements[idx], state)
+
+    def _emit_tlm_prm_read(
+        self, node: AstExpr, sym: ChDef | PrmDef, state: CompileState
+    ) -> ir.Value:
+        """Read the current value of the telemetry channel or parameter *sym*.
+        The host writes the value into the shared read buffer and reports
+        whether it is valid; an invalid value faults with TLM_CHAN_NOT_FOUND
+        or PRM_NOT_FOUND. Returns the value read out of the buffer."""
+        b = self.builder
+        i32 = ir.IntType(32)
+        i8_ptr = ir.IntType(8).as_pointer()
+        # CreateTlmPrmBuffers sized the buffer over every read in the module,
+        # so this read's value fits.
+        buf = state.backend.tlm_prm_buffer
+        assert buf is not None, "CreateTlmPrmBuffers did not see this read"
+        buf_size = buf.type.pointee.count
+        buf_args = [
+            b.bitcast(buf, i8_ptr),
+            ir.Constant(i32, buf_size),
+        ]
+        if is_instance_compat(sym, ChDef):
+            time_buf = state.backend.tlm_time_buffer
+            assert time_buf is not None, "CreateTlmPrmBuffers did not see this read"
+            time_buf_size = time_buf.type.pointee.count
+            valid = b.call(
+                b.module.globals[HOST_TLM_FUNC_NAME],
+                [
+                    ir.Constant(ir.IntType(64), sym.ch_id),
+                    b.bitcast(time_buf, i8_ptr),
+                    ir.Constant(i32, time_buf_size),
+                    *buf_args,
+                ],
+            )
+            ok_value = TLM_VALID.enum_dict["VALID"]
+            code = DirectiveErrorCode.TLM_CHAN_NOT_FOUND
+            name = "tlm"
+        else:
+            valid = b.call(
+                b.module.globals[HOST_PRM_FUNC_NAME],
+                [ir.Constant(ir.IntType(64), sym.prm_id), *buf_args],
+            )
+            ok_value = PARAM_VALID.enum_dict["VALID"]
+            code = DirectiveErrorCode.PRM_NOT_FOUND
+            name = "prm"
+        self._emit_fault_when(
+            b.icmp_unsigned("!=", valid, ir.Constant(i32, ok_value)), code, name
+        )
+        return self._emit_load_big_endian(state.synthesized_types[node], buf, 0)
 
     def _emit_ptr(self, expr: AstExpr, state: CompileState) -> ir.Value:
         """Emit a pointer to *expr*'s value, without loading it."""
@@ -506,20 +588,7 @@ class EmitLlvmExpr(Emitter):
         too_low = b.icmp_signed("<", idx, ir.Constant(idx.type, 0))
         too_high = b.icmp_signed(">=", idx, ir.Constant(idx.type, length))
         oob = b.or_(too_low, too_high)
-        fail_block = b.function.append_basic_block("idx_oob")
-        ok_block = b.function.append_basic_block("idx_ok")
-        b.cbranch(oob, fail_block, ok_block)
-        b.position_at_end(fail_block)
-        b.call(
-            b.module.globals[HOST_PANIC_FUNC_NAME],
-            [
-                ir.Constant(
-                    ERROR_CODE_TYPE, DirectiveErrorCode.ARRAY_OUT_OF_BOUNDS.value
-                )
-            ],
-        )
-        b.unreachable()
-        b.position_at_end(ok_block)
+        self._emit_fault_when(oob, DirectiveErrorCode.ARRAY_OUT_OF_BOUNDS, "idx")
 
     def emit_AstFuncCall(
         self, node: AstFuncCall, state: CompileState
@@ -601,11 +670,12 @@ class EmitLlvmExpr(Emitter):
 
         # The host returns the response widened to i32; narrow it back to
         # Fw.CmdResponse's type.
+        buf_size = command.buf.type.pointee.count
         response = b.call(
             b.module.globals[HOST_CMD_FUNC_NAME],
             [
                 b.bitcast(command.buf, ir.IntType(8).as_pointer()),
-                ir.Constant(ir.IntType(32), command.size),
+                ir.Constant(ir.IntType(32), buf_size),
             ],
         )
         # assumption: the response is a valid cmd response code
@@ -713,21 +783,11 @@ class EmitLlvmExpr(Emitter):
             is_false = b.icmp_unsigned(
                 "==", byte, ir.Constant(byte.type, fpy.types.FW_SERIALIZE_FALSE_VALUE)
             )
-            fail_block = b.function.append_basic_block("bool_bad")
-            ok_block = b.function.append_basic_block("bool_ok")
-            b.cbranch(b.or_(is_true, is_false), ok_block, fail_block)
-            b.position_at_end(fail_block)
-            b.call(
-                b.module.globals[HOST_PANIC_FUNC_NAME],
-                [
-                    ir.Constant(
-                        ERROR_CODE_TYPE,
-                        DirectiveErrorCode.DESERIALIZE_ERROR_INVALID_BOOL.value,
-                    )
-                ],
+            self._emit_fault_when(
+                b.not_(b.or_(is_true, is_false)),
+                DirectiveErrorCode.DESERIALIZE_ERROR_INVALID_BOOL,
+                "bool",
             )
-            b.unreachable()
-            b.position_at_end(ok_block)
             return is_true
         if width > 1:
             ptr = b.bitcast(ptr, ir.IntType(width * 8).as_pointer())
@@ -814,10 +874,14 @@ class AssignAddresses(TopDownVisitor):
         return STOP_DESCENT  # a def is a function of its own, with its own storage
 
     def visit_AstGetAttr(self, node: AstGetAttr, state: CompileState):
-        self._create_temp_slot(node, state)
+        parent = self._temp_slot_parent(node, state)
+        if parent is not None:
+            self._create_temp_slot(parent, state)
 
     def visit_AstIndexExpr(self, node: AstIndexExpr, state: CompileState):
-        self._create_temp_slot(node, state)
+        parent = self._temp_slot_parent(node, state)
+        if parent is not None:
+            self._create_temp_slot(parent, state)
 
     def visit_AstFuncCall(self, node: AstFuncCall, state: CompileState):
         func = state.resolved_symbols.get(node.func)
@@ -843,11 +907,12 @@ class AssignAddresses(TopDownVisitor):
         else:
             ptrs[sym] = self.builder.alloca(sym.type.llvm_type, name=sym.name)
 
-    def _create_temp_slot(self, access: AstExpr, state: CompileState) -> None:
-        """Give the expression the member/element access *access* addresses
-        into -- its parent -- a slot to be copied into, when the parent does not
-        already denote a location. A folded constructor call's constant
-        aggregate is the case that arises: a runtime index has to GEP into it.
+    def _temp_slot_parent(self, access: AstExpr, state: CompileState) -> AstExpr | None:
+        """The parent expression the member/element access *access* addresses
+        into, when that parent needs a temp slot: it does not denote a
+        location of its own (a folded constructor call's constant aggregate
+        is the case that arises: a runtime index has to GEP into it) and has
+        no slot yet. None when no slot is needed.
 
         Only the parent one level up is considered, because every link of a
         chain like ``Ctor(...)[i].m`` is itself an access this pass visits, so
@@ -857,22 +922,28 @@ class AssignAddresses(TopDownVisitor):
         # reached for an access that survives folding and is addressable -- the
         # same two tests the emitter makes before it calls _emit_ptr.
         if state.const_expr_values.get(access) is not None:
-            return  # folded to a constant, so no address is taken
+            return None  # folded to a constant, so no address is taken
         if not is_addressable(access, state):
-            return  # a qualified name, or a never-built anonymous literal
+            return None  # a qualified name, or a never-built anonymous literal
 
         # _emit_ptr copies its argument to a slot on exactly this condition.
         parent = state.resolved_symbols[access].parent_expr
         if is_addressable(parent, state):
-            return
-
-        slots = state.backend.temp_slots
-        if parent not in slots:
+            return None
+        if parent in state.backend.temp_slots:
             # The AST can share one expression between two places (a default
             # argument), so a parent may be reached more than once.
-            slots[parent] = self.builder.alloca(
-                state.contextual_types[parent].llvm_type, name="temp"
-            )
+            return None
+        return parent
+
+    def _create_temp_slot(self, expr: AstExpr, state: CompileState) -> None:
+        """Give *expr* -- a value that denotes no location -- a stack slot to
+        be copied into, so an access into it has an address to GEP into."""
+        slots = state.backend.temp_slots
+        assert expr not in slots, expr
+        slots[expr] = self.builder.alloca(
+            state.contextual_types[expr].llvm_type, name="temp"
+        )
 
     def _create_command_buffer(
         self, node: AstFuncCall, func: CommandSymbol, state: CompileState
@@ -896,17 +967,9 @@ class AssignAddresses(TopDownVisitor):
                 runtime_args.append((len(contents), arg, arg_type))
                 contents += bytes(arg_type.max_size)
 
-        module = state.backend.module
-        buf_type = ir.ArrayType(ir.IntType(8), len(contents))
-        buf = ir.GlobalVariable(
-            module, buf_type, name=module.get_unique_name("cmd_buf")
-        )
-        buf.linkage = "private"
+        buf = create_byte_buffer(state.backend.module, "cmd_buf", contents)
         buf.global_constant = not runtime_args
-        buf.initializer = ir.Constant(buf_type, contents)
-        state.backend.cmd_buffers[node] = CommandBuffer(
-            buf, len(contents), runtime_args
-        )
+        state.backend.cmd_buffers[node] = CommandBuffer(buf, runtime_args)
 
 
 class EmitLlvmStmt(Emitter):
@@ -1132,6 +1195,48 @@ class DeclareFunctions(Visitor):
         state.backend.funcs[node] = fn
 
 
+class CreateTlmPrmBuffers(TopDownVisitor):
+    """Creates the buffers the telemetry-channel and parameter reads share
+    (see LlvmBackendState.tlm_prm_buffer), before any function is lowered:
+    one value buffer sized to the largest read, plus the Fw.Time buffer when
+    any read is a telemetry read."""
+
+    def __init__(self):
+        super().__init__()
+        self.max_value_size = 0
+        self.reads_tlm = False
+
+    def run(self, start: Ast, state: CompileState):
+        super().run(start, state)
+        module = state.backend.module
+        if self.max_value_size > 0:
+            state.backend.tlm_prm_buffer = create_byte_buffer(
+                module, "tlm_prm_buf", bytearray(self.max_value_size)
+            )
+        if self.reads_tlm:
+            state.backend.tlm_time_buffer = create_byte_buffer(
+                module, "tlm_time", bytearray(TIME.max_size)
+            )
+
+    def visit_AstDef(self, node: AstDef, state: CompileState):
+        if node not in state.used_funcs:
+            return STOP_DESCENT  # never lowered, so its reads don't count
+
+    def visit_AstGetAttr(self, node: AstGetAttr, state: CompileState):
+        sym = state.resolved_symbols.get(node)
+        if is_instance_compat(sym, ChDef):
+            value_type = sym.ch_type
+            self.reads_tlm = True
+        elif is_instance_compat(sym, PrmDef):
+            value_type = sym.prm_type
+        else:
+            return
+        # Semantics rejects reads of non-constant-size (string-containing)
+        # types, so the value always has a static serialized layout.
+        assert is_type_constant_size(value_type), value_type
+        self.max_value_size = max(self.max_value_size, value_type.max_size)
+
+
 class GenerateLlvmModule:
     """Builds the LLVM module for a sequence: declares an LLVM function for
     the entry point and for every used script function, then defines each one
@@ -1150,6 +1255,7 @@ class GenerateLlvmModule:
         declare_host_imports(module)
         state.backend = LlvmBackendState(module)
         self._create_flags_slot(state)
+        CreateTlmPrmBuffers().run(root_block, state)
 
         # The user entrypoint (see FPY_ENTRY_POINT): void main(), where
         # returning at all means success. Created before the script functions
