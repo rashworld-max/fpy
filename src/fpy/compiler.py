@@ -15,6 +15,7 @@ from fpy.codegen_fpybc import (
     ResolveLabels,
 )
 from fpy.desugaring import (
+    DesugarAnonExprs,
     DesugarAugmentedAssignments,
     DesugarDefaultArgs,
     DesugarForLoops,
@@ -27,6 +28,7 @@ from fpy.semantics import (
     CreateScopes,
     CheckResolvedSymbolKinds,
     CheckAllUnqualifiedIdentifiersResolved,
+    CheckAnonStructMembers,
     CheckAssignSyntax,
     CheckSequenceMetadataDefinedAtTop,
     CalculateConstExprValues,
@@ -236,6 +238,8 @@ def analyze_ast(body: AstBlock, state: CompileState) -> CompileState:
         CreateScopes(),
         # check that assignment targets are valid
         CheckAssignSyntax(),
+        # check that no anonymous struct names a member twice
+        CheckAnonStructMembers(),
         # register all user-defined functions in the global callable scope
         # (and the builtin library functions in the shared base callable scope)
         DefineFunctions(),
@@ -273,6 +277,10 @@ def analyze_ast(body: AstBlock, state: CompileState) -> CompileState:
         ResolveSequenceDependencies(),
         # this pass resolves all attributes and items, as well as determines the type of expressions
         PickTypesAndResolveFields(),
+        # now that every anonymous struct/array has been given a type, turn
+        # each into a call of that type's constructor (and reject any that
+        # were not given a type), so no later pass sees an anonymous expr
+        DesugarAnonExprs(),
         # Calculate const values for default arguments first (and check they're const).
         # This must happen before CalculateConstExprValues because call sites may
         # reference functions defined later in the source, and we need the default

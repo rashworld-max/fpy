@@ -93,6 +93,7 @@ from fpy.bytecode.directives import (
 )
 from fpy.syntax import (
     AstAssert,
+    AstAnonExpr,
     AstAnonStruct,
     AstAnonArray,
     AstBinaryOp,
@@ -269,6 +270,16 @@ class CheckAssignSyntax(TopDownVisitor):
                 node,
             )
             return
+
+
+class CheckAnonStructMembers(Visitor):
+    def visit_AstAnonStruct(self, node: AstAnonStruct, state: CompileState):
+        seen_names: set[str] = set()
+        for member in node.members:
+            if member.name in seen_names:
+                state.err(f"Duplicate member '{member.name}'", member)
+                return
+            seen_names.add(member.name)
 
 
 class DefineFunctions(TopDownVisitor):
@@ -547,8 +558,8 @@ class AssignNameGroups(Visitor):
             state.contextual_name_group[node.value] = NameGroup.VALUE
 
     def visit_AstAnonStruct(self, node: AstAnonStruct, state: CompileState):
-        for _, value_expr in node.members:
-            state.contextual_name_group[value_expr] = NameGroup.VALUE
+        for member in node.members:
+            state.contextual_name_group[member.value] = NameGroup.VALUE
 
     def visit_AstAnonArray(self, node: AstAnonArray, state: CompileState):
         for elem_expr in node.elements:
@@ -1247,12 +1258,15 @@ class PickTypesAndResolveFields(Visitor):
         unconverted_type = state.synthesized_types[node]
         current_contextual = state.contextual_types[node]
 
-        # Already coerced — idempotent if same target, bug if different
+        # Already coerced. Idempotent if same target, bug if different
         if current_contextual != unconverted_type:
             assert (
                 current_contextual == type
             ), f"double coercion: {unconverted_type} -> {current_contextual} vs {type}"
             return True
+
+        if unconverted_type.kind in (TypeKind.ANON_STRUCT, TypeKind.ANON_ARRAY):
+            return self._coerce_anon_expr(node, unconverted_type, type, state)
 
         if not self.can_coerce_type(unconverted_type, type):
             state.err(
@@ -1271,59 +1285,52 @@ class PickTypesAndResolveFields(Visitor):
             else:
                 type = unconverted_type
 
-        # For anon structs/arrays, recursively coerce children and build resolved_args
-        if unconverted_type.kind == TypeKind.ANON_STRUCT:
-            return self._coerce_anon_struct(node, type, state)
-        if unconverted_type.kind == TypeKind.ANON_ARRAY:
-            return self._coerce_anon_array(node, type, state)
-
         state.contextual_types[node] = type
         return True
 
-    def _coerce_anon_struct(
-        self, node: AstAnonStruct, target: FpyType, state: CompileState
+    def _coerce_anon_expr(
+        self,
+        node: AstAnonExpr,
+        anon_type: FpyType,
+        target: FpyType,
+        state: CompileState,
     ) -> bool:
-        """Recursively coerce each provided member and build resolved_args.
+        """Coerce an anonymous struct/array to *target*. The anonymous expr is
+        a call of the target type's constructor, with its members as named
+        arguments / its elements as positional arguments, so it is checked
+        exactly as that call would be."""
+        if anon_type.kind == TypeKind.ANON_STRUCT:
+            target_kind, args = TypeKind.STRUCT, node.members
+        else:
+            target_kind, args = TypeKind.ARRAY, node.elements
+        if target.kind != target_kind:
+            state.err(
+                f"Expected {target.display_name}, found {anon_type.display_name}",
+                node,
+            )
+            return False
 
-        Called after can_coerce_type has already confirmed structural compatibility.
-        """
-        provided_members = {name: value_expr for name, value_expr in node.members}
-
-        # Build resolved list in target member order: coerce provided, fill defaults
-        resolved_members = []
-        for member in target.members:
-            if member.name in provided_members:
-                value_expr = provided_members[member.name]
-                if not self.coerce_expr_type(value_expr, member.type, state):
-                    return False
-                resolved_members.append(value_expr)
-            else:
-                resolved_members.append(target.member_defaults[member.name])
-
-        state.resolved_args[node] = resolved_members
+        ctor = state.type_ctors[target]
+        if not self._check_ctor_type(ctor, node, state):
+            return False
+        if self.bind_and_coerce_args(node, ctor, args, state) is None:
+            return False
         state.contextual_types[node] = target
         return True
 
-    def _coerce_anon_array(
-        self, node: AstAnonArray, target: FpyType, state: CompileState
+    def _check_ctor_type(
+        self, ctor: TypeCtorSymbol, node: Ast, state: CompileState
     ) -> bool:
-        """Recursively coerce each provided element and build resolved_args.
-
-        Called after can_coerce_type has already confirmed structural compatibility.
-        """
-        # Coerce each provided element to the target element type
-        for elem_expr in node.elements:
-            if not self.coerce_expr_type(elem_expr, target.elem_type, state):
-                return False
-
-        # Build resolved list: provided elements + defaults for missing positions.
-        resolved = list(node.elements)
-        for i in range(len(node.elements), target.length):
-            resolved.append(target.elem_defaults[i])
-
-        state.resolved_args[node] = resolved
-        state.contextual_types[node] = target
-        return True
+        """A constructor call makes a runtime value of its type, and a runtime
+        value must be constant-sized. Reports an error at *node* and returns
+        False if the type is not."""
+        if is_type_constant_size(ctor.type):
+            return True
+        state.err(
+            f"Type {ctor.type.display_name} is not constant-sized (contains strings)",
+            node,
+        )
+        return False
 
     def find_common_type(
         self, first_type: FpyType, second_type: FpyType
@@ -1449,12 +1456,10 @@ class PickTypesAndResolveFields(Visitor):
         if not is_type_constant_size(concrete):
             return None
 
+        # every member must exist in the concrete struct and be coercible to
+        # it.
         target_members = {m.name: m for m in concrete.members}
-        seen: set[str] = set()
         for member in anon.members:
-            if member.name in seen:
-                return None
-            seen.add(member.name)
             if member.name not in target_members:
                 return None
             if not self.can_coerce_type(member.type, target_members[member.name].type):
@@ -1517,25 +1522,11 @@ class PickTypesAndResolveFields(Visitor):
             parent_type = state.synthesized_types[node.parent]
 
             if parent_type.kind == TypeKind.ANON_STRUCT:
-                # Direct member access on anonymous struct literal
-                member_type = None
-                for m in parent_type.members:
-                    if m.name == node.attr:
-                        member_type = m.type
-                        break
-                if member_type is None:
-                    state.err(
-                        f"Anonymous struct has no member named '{node.attr}'",
-                        node,
-                    )
-                    return
-                this_sym = FieldAccess(
-                    is_struct_member=True,
-                    parent_expr=node.parent,
-                    type=member_type,
-                    base_sym=None,
-                    name=node.attr,
+                state.err(
+                    "Cannot access a member of a struct literal",
+                    node,
                 )
+                return
             elif parent_type.kind == TypeKind.STRUCT:
                 if not is_type_constant_size(parent_type):
                     state.err(
@@ -1610,26 +1601,10 @@ class PickTypesAndResolveFields(Visitor):
         parent_type = state.synthesized_types[node.parent]
 
         if parent_type.kind == TypeKind.ANON_ARRAY:
-            # Index access on anonymous array literal
-            if parent_type.length == 0:
-                state.err("Cannot index into an empty anonymous array", node)
-                return
-
-            # coerce the index expression to array index type
-            if not self.coerce_expr_type(node.item, ArrayIndexType, state):
-                return
-
-            sym = FieldAccess(
-                is_array_element=True,
-                parent_expr=node.parent,
-                type=parent_type.elem_type,
-                base_sym=None,
-                idx_expr=node.item,
+            state.err(
+                "Cannot index an array literal",
+                node,
             )
-
-            state.resolved_symbols[node] = sym
-            state.synthesized_types[node] = parent_type.elem_type
-            state.contextual_types[node] = parent_type.elem_type
             return
 
         if parent_type.kind != TypeKind.ARRAY:
@@ -1828,7 +1803,9 @@ class PickTypesAndResolveFields(Visitor):
         resolved = self._resolve_time_op(lhs_type, rhs_type, node.op)
         if resolved is not None:
             resolved_lhs, resolved_rhs, common_type, result_type, _, _ = resolved
-            # _resolve_time_op already confirmed coercibility
+            # _resolve_time_op confirmed each operand can coerce to its time
+            # type, and those types have only scalar members, so coercion
+            # cannot fail here
             assert self.coerce_expr_type(node.lhs, resolved_lhs, state)
             assert self.coerce_expr_type(node.rhs, resolved_rhs, state)
             state.op_intermediate_types[node] = common_type
@@ -1885,18 +1862,9 @@ class PickTypesAndResolveFields(Visitor):
         state.contextual_types[node] = BOOL
 
     def visit_AstAnonStruct(self, node: AstAnonStruct, state: CompileState):
-        # Check for duplicate member names
-        seen_names: set[str] = set()
-        for name, _ in node.members:
-            if name in seen_names:
-                state.err(f"Duplicate member '{name}' in anonymous struct", node)
-                return
-            seen_names.add(name)
-
         # Synthesize an anonymous struct type from the member expressions
         members = tuple(
-            StructMember(name, state.synthesized_types[value_expr])
-            for name, value_expr in node.members
+            StructMember(m.name, state.synthesized_types[m.value]) for m in node.members
         )
         anon_type = FpyType(
             TypeKind.ANON_STRUCT,
@@ -1907,41 +1875,29 @@ class PickTypesAndResolveFields(Visitor):
         state.contextual_types[node] = anon_type
 
     def visit_AstAnonArray(self, node: AstAnonArray, state: CompileState):
-        # Synthesize an anonymous array type from the element expressions
-        elem_types = [state.synthesized_types[elem] for elem in node.elements]
-        # Compute common element type
-        common_elem_type = None
-        if len(elem_types) > 0:
-            common_elem_type = elem_types[0]
-            for et in elem_types[1:]:
-                common_elem_type = self.find_common_type(common_elem_type, et)
-                if common_elem_type is None:
-                    state.err("Array elements have no common type", node)
-                    return
+        # Synthesize an anonymous array type.
         anon_type = FpyType(
             TypeKind.ANON_ARRAY,
-            f"$AnonArray[{len(elem_types)}]",
+            f"$AnonArray[{len(node.elements)}]",
             length=len(node.elements),
-            elem_type=common_elem_type,
         )
         state.synthesized_types[node] = anon_type
         state.contextual_types[node] = anon_type
 
-    def resolve_args(
+    def bind_args(
         self,
-        node: AstFuncCall,
+        node: Ast,
         func: CallableSymbol,
         node_args: list,
         state: CompileState,
     ) -> list[AstExpr] | CompileError:
-        """Resolve a function call's arguments.
+        """Bind a call's arguments to *func*'s parameters: positional
+        arguments in order, named arguments by name, and each parameter's
+        default for an argument not given. Checks each bound argument can be
+        coerced to its parameter's type.
 
-        Reorders named arguments to positional order, fills in default values
-        for missing optional arguments, checks for missing required arguments,
-        and validates argument types are compatible.
-
-        Returns assigned_args on success.
-        Returns a CompileError if there's an issue with the arguments.
+        Returns the bound arguments, one per parameter in parameter order, or
+        a CompileError if an argument cannot be bound.
         """
         func_args = func.args
         param_name_to_idx = {a[0]: i for i, a in enumerate(func_args)}
@@ -2045,37 +2001,40 @@ class PickTypesAndResolveFields(Visitor):
         return assigned
 
     def visit_AstFuncCall(self, node: AstFuncCall, state: CompileState):
-        func = state.resolved_symbols.get(node.func)
-        if func is None:
-            # if it were a reference to a callable, it would have already been resolved
-            # if it were a symbol to something else, it would have already errored
-            # so it's not even a symbol, just some expr
-            state.err(f"Unknown function", node.func)
-            return
+        # CheckResolvedSymbolKinds rejected any callee that did not resolve to
+        # a callable
+        func = state.resolved_symbols[node.func]
+        assert is_instance_compat(func, CallableSymbol), func
 
-        # Check that type constructors are for constant-sized types
         if is_instance_compat(func, TypeCtorSymbol):
-            if not is_type_constant_size(func.type):
-                state.err(
-                    f"Type {func.type.display_name} is not constant-sized (contains strings)",
-                    node.func,
-                )
+            if not self._check_ctor_type(func, node.func, state):
                 return
 
         node_args = node.args if node.args else []
-
-        # Resolve args: reorder named args, fill in defaults, check types
-        result = self.resolve_args(node, func, node_args, state)
-        if is_instance_compat(result, CompileError):
-            state.errors.append(result)
+        if self.bind_and_coerce_args(node, func, node_args, state) is None:
             return
 
-        resolved_args = result
-        state.resolved_args[node] = resolved_args
+        state.synthesized_types[node] = func.return_type
+        state.contextual_types[node] = func.return_type
 
-        # go handle coercion/casting
+    def bind_and_coerce_args(
+        self,
+        node: Ast,
+        func: CallableSymbol,
+        node_args: list,
+        state: CompileState,
+    ) -> list[AstExpr] | None:
+        """Bind a call's arguments to *func*'s parameters (bind_args), record
+        them in state.resolved_args, and coerce each to its parameter's type.
+        Returns the bound arguments, or None after reporting an error."""
+        args = self.bind_args(node, func, node_args, state)
+        if is_instance_compat(args, CompileError):
+            state.errors.append(args)
+            return None
+        state.resolved_args[node] = args
+
         if is_instance_compat(func, CastSymbol):
-            node_arg = resolved_args[0]
+            node_arg = args[0]
             output_type = func.to_type
             # we're going from input_type to output type, and we're going to ignore
             # the coercion rules
@@ -2084,20 +2043,20 @@ class PickTypesAndResolveFields(Visitor):
             # let us turn off some checks for boundaries later when we do const folding
             # we turn off the checks because the user is asking us to force this!
             state.expr_explicit_casts.append(node_arg)
-        else:
-            for value_expr, arg in zip(resolved_args, func.args):
-                target_type = arg[1]
-                # Skip coercion for FpyValue defaults from builtins or type constructors
-                if not is_instance_compat(value_expr, Ast):
-                    continue
-                # Skip coercion for default values from forward-called functions.
-                # These will be coerced when the function definition is visited.
-                if value_expr not in state.synthesized_types:
-                    continue
-                assert self.coerce_expr_type(value_expr, target_type, state)
+            return args
 
-        state.synthesized_types[node] = func.return_type
-        state.contextual_types[node] = func.return_type
+        for value_expr, arg in zip(args, func.args):
+            target_type = arg[1]
+            # Skip coercion for FpyValue defaults from builtins or type constructors
+            if not is_instance_compat(value_expr, Ast):
+                continue
+            # Skip coercion for default values from forward-called functions.
+            # These will be coerced when the function definition is visited.
+            if value_expr not in state.synthesized_types:
+                continue
+            if not self.coerce_expr_type(value_expr, target_type, state):
+                return None
+        return args
 
     def visit_AstRange(self, node: AstRange, state: CompileState):
         if not self.coerce_expr_type(node.lower_bound, LoopVarType, state):
@@ -2457,28 +2416,15 @@ class CalculateConstExprValues(Visitor):
         elif is_instance_compat(sym, FieldAccess):
             parent_value = state.const_expr_values[node.parent]
             if parent_value is None:
-                # Parent is not const. For anon struct, try getting the member
-                # expression's const value directly.
-                if is_instance_compat(node.parent, AstAnonStruct):
-                    for name, value_expr in node.parent.members:
-                        if name == node.attr:
-                            member_val = state.const_expr_values.get(value_expr)
-                            if member_val is not None:
-                                expr_value = member_val
-                            break
-                if expr_value is None:
-                    state.const_expr_values[node] = None
-                    return
-            else:
-                # we are accessing an attribute of something with an fprime value at compile time
-                # we must be getting a member
-                if isinstance(parent_value, FpyValue) and parent_value.type.kind in (
-                    TypeKind.STRUCT,
-                    TypeKind.ANON_STRUCT,
-                ):
-                    expr_value = parent_value.val[node.attr]
-                else:
-                    assert False, parent_value
+                state.const_expr_values[node] = None
+                return
+            # we are accessing an attribute of something with an fprime value at compile time
+            # we must be getting a member
+            assert (
+                isinstance(parent_value, FpyValue)
+                and parent_value.type.kind == TypeKind.STRUCT
+            ), parent_value
+            expr_value = parent_value.val[node.attr]
 
         assert expr_value is not None
 
@@ -2509,9 +2455,9 @@ class CalculateConstExprValues(Visitor):
             state.const_expr_values[node] = None
             return
 
-        assert isinstance(parent_value, FpyValue) and parent_value.type.kind in (
-            TypeKind.ARRAY,
-            TypeKind.ANON_ARRAY,
+        assert (
+            isinstance(parent_value, FpyValue)
+            and parent_value.type.kind == TypeKind.ARRAY
         ), parent_value
 
         idx = state.const_expr_values.get(node.item)
@@ -2867,54 +2813,6 @@ class CalculateConstExprValues(Visitor):
         # ranges don't really end up having a value, they kinda just exist as a type
         state.const_expr_values[node] = None
 
-    def visit_AstAnonStruct(self, node: AstAnonStruct, state: CompileState):
-        converted_type = state.contextual_types[node]
-
-        if converted_type.kind == TypeKind.ANON_STRUCT:
-            exprs = [value_expr for _, value_expr in node.members]
-            names = [name for name, _ in node.members]
-        else:
-            assert converted_type.kind == TypeKind.STRUCT, converted_type
-            exprs = state.resolved_args[node]
-            names = [m.name for m in converted_type.members]
-
-        values = []
-        for expr in exprs:
-            if is_instance_compat(expr, Ast):
-                val = state.const_expr_values.get(expr)
-                if val is None:
-                    state.const_expr_values[node] = None
-                    return
-                values.append(val)
-            else:
-                values.append(expr)
-
-        state.const_expr_values[node] = FpyValue(
-            converted_type, dict(zip(names, values))
-        )
-
-    def visit_AstAnonArray(self, node: AstAnonArray, state: CompileState):
-        converted_type = state.contextual_types[node]
-
-        if converted_type.kind == TypeKind.ANON_ARRAY:
-            exprs = list(node.elements)
-        else:
-            assert converted_type.kind == TypeKind.ARRAY, converted_type
-            exprs = state.resolved_args[node]
-
-        values = []
-        for expr in exprs:
-            if is_instance_compat(expr, Ast):
-                val = state.const_expr_values.get(expr)
-                if val is None:
-                    state.const_expr_values[node] = None
-                    return
-                values.append(val)
-            else:
-                values.append(expr)
-
-        state.const_expr_values[node] = FpyValue(converted_type, values)
-
     def visit_default(self, node, state):
         # coding error, missed an expr
         assert not is_instance_compat(node, AstExpr), node
@@ -2997,15 +2895,10 @@ class CheckConstArrayAccesses(Visitor):
         idx_value = state.const_expr_values.get(node.item)
 
         parent_type = state.contextual_types[node.parent]
-        assert parent_type.kind in (TypeKind.ARRAY, TypeKind.ANON_ARRAY), parent_type
+        assert parent_type.kind == TypeKind.ARRAY, parent_type
 
         if idx_value is None:
             # can't check at compile time
-            if parent_type.kind == TypeKind.ANON_ARRAY:
-                state.err(
-                    "Index on anonymous array must be a compile-time constant",
-                    node.item,
-                )
             return
 
         if idx_value.val < 0 or idx_value.val >= parent_type.length:

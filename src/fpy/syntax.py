@@ -233,7 +233,7 @@ class AstRange(Ast):
 
 @dataclass
 class AstAnonStruct(Ast):
-    members: list[tuple[str, "AstExpr"]]
+    members: list[AstNamedArgument]
 
 
 @dataclass
@@ -242,6 +242,7 @@ class AstAnonArray(Ast):
 
 
 AstOp = Union[AstBinaryOp, AstUnaryOp]
+AstAnonExpr = Union[AstAnonStruct, AstAnonArray]
 
 AstReference = Union[AstGetAttr, AstIndexExpr, AstIdent]
 AstExpr = Union[
@@ -718,7 +719,7 @@ class FpyTransformer(Transformer):
     range = AstRange
 
     anon_struct = no_inline(AstAnonStruct)
-    anon_struct_member = no_inline_or_meta(tuple)
+    anon_struct_member = AstNamedArgument
     anon_array = no_inline(AstAnonArray)
 
     def_stmt = AstDef

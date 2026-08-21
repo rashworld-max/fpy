@@ -156,10 +156,14 @@ class CompileState:
     """expr to the fprime value it will end up being on the stack after type conversions.
     None if unsure at compile time.  NOTHING_VALUE for void expressions."""
 
+    type_ctors: dict[FpyType, TypeCtorSymbol] = field(default_factory=dict)
+    """each struct and array type -> its type constructor"""
+
     resolved_args: dict[Ast, list[AstExpr]] = field(default_factory=dict)
-    """Maps function calls, anon structs, and anon arrays to resolved arguments
-    in positional order. Default values are filled in for arguments not provided
-    at the call site (or struct members / array elements with defaults)."""
+    """Maps function calls (and, until DesugarAnonExprs turns them into type
+    constructor calls, anonymous structs and arrays) to resolved arguments in
+    positional order. Default values are filled in for arguments not provided
+    at the call site."""
 
     function_global_uses: dict[AstDef, list[VariableSymbol]] = field(
         default_factory=dict
@@ -531,8 +535,9 @@ def _make_type_ctor(name: str, typ: FpyType) -> TypeCtorSymbol | None:
 @lru_cache(maxsize=4)
 def _build_global_scopes(dictionary: str) -> tuple:
     """
-    Build and cache the 3 global scopes and type_name_dict for a dictionary.
-    Returns tuple of (type_scope, callable_scope, values_scope, type_name_dict).
+    Build and cache the 3 global scopes, type_name_dict and type_ctors for a
+    dictionary. Returns tuple of (type_scope, callable_scope, values_scope,
+    type_name_dict, type_ctors).
     """
     d = load_dictionary(dictionary)
     cmd_name_dict = d["cmd_name_dict"]
@@ -624,10 +629,12 @@ def _build_global_scopes(dictionary: str) -> tuple:
             typ.name, typ, [("value", I64, None)], typ
         )
 
+    type_ctors: dict[FpyType, TypeCtorSymbol] = {}
     for name, typ in type_name_dict.items():
         ctor = _make_type_ctor(name, typ)
         if ctor is not None:
             callable_name_dict[name] = ctor
+            type_ctors[typ] = ctor
 
     for macro_name, macro in MACROS.items():
         callable_name_dict[macro_name] = macro
@@ -650,7 +657,7 @@ def _build_global_scopes(dictionary: str) -> tuple:
         ),
     )
 
-    return (type_scope, callable_scope, values_scope, type_name_dict)
+    return (type_scope, callable_scope, values_scope, type_name_dict, type_ctors)
 
 
 def get_base_compile_state(
@@ -663,8 +670,8 @@ def get_base_compile_state(
     main_file_path: str | None = None,
 ) -> CompileState:
     """return the initial state of the compiler, based on the given dict path"""
-    type_scope, callable_scope, values_scope, type_defs = _build_global_scopes(
-        dictionary
+    type_scope, callable_scope, values_scope, type_defs, type_ctors = (
+        _build_global_scopes(dictionary)
     )
     constants = load_dictionary(dictionary)["constants"]
 
@@ -704,6 +711,7 @@ def get_base_compile_state(
 
     state = CompileState(
         type_defs=type_defs,
+        type_ctors=type_ctors,
         ground_binary_dir=ground_binary_dir,
         max_directives_count=_const_int(
             "Svc.Fpy.MAX_SEQUENCE_STATEMENT_COUNT", DEFAULT_MAX_DIRECTIVES_COUNT
