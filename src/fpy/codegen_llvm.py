@@ -374,28 +374,35 @@ class EmitLlvmExpr(Emitter):
     def _emit_builtin_call(
         self, node_args: list, func: BuiltinFuncSymbol, state: CompileState
     ) -> ir.Value | None:
-        # Pass each argument as (emitted ir.Value, its constant FpyValue or None
-        # if it isn't a compile-time constant). The builtin's generate_llvm picks
-        # whichever it needs. Args the builtin requires to be compile-time
-        # constants are not emitted at all -- they may have no machine
-        # representation (e.g. log's InternalString message) -- so they arrive
-        # as (None, value).
-        args: list[tuple[ir.Value | None, FpyValue | None]] = []
+        # Pass each argument as (emitted ir.Value, its constant FpyValue or
+        # None if it isn't a compile-time constant, its contextual type). The
+        # builtin's generate_llvm picks whichever it needs. Args the builtin
+        # requires to be compile-time constants, and args whose type has no
+        # machine representation (a string), are not emitted at all -- they
+        # arrive as (None, value, type).
+        args: list[tuple[ir.Value | None, FpyValue | None, FpyType]] = []
         for i, arg in enumerate(node_args):
             const_val = (
                 arg
                 if is_instance_compat(arg, FpyValue)
                 else state.const_expr_values.get(arg)
             )
-            if i in func.const_arg_indices:
+            arg_type = (
+                arg.type
+                if is_instance_compat(arg, FpyValue)
+                else state.contextual_types[arg]
+            )
+            if i in func.const_arg_indices or arg_type.is_string:
+                # A string arg is necessarily constant: a runtime string can't
+                # exist (semantics rejects it).
                 assert (
                     const_val is not None
-                ), f"const arg {i} of {func.name} should have been validated by semantics"
-                args.append((None, const_val))
+                ), f"arg {i} of {func.name} should have been validated by semantics"
+                args.append((None, const_val, arg_type))
             elif is_instance_compat(arg, FpyValue):  # a filled-in default argument
-                args.append((arg.llvm_value, const_val))
+                args.append((arg.llvm_value, const_val, arg_type))
             else:
-                args.append((self.emit(arg, state), const_val))
+                args.append((self.emit(arg, state), const_val, arg_type))
         return func.generate_llvm(self.builder, args)
 
     def _emit_command_dispatch(
@@ -767,19 +774,41 @@ def _emit_float_modulo(b: ir.IRBuilder, lhs: ir.Value, rhs: ir.Value) -> ir.Valu
 def _emit_bytes_equal(
     self: EmitLlvmExpr, node: AstBinaryOp, state: CompileState
 ) -> ir.Value:
-    """Emit ``==`` of two same-typed non-numeric values. Enums and bools lower
-    to integers, so they compare with icmp; aggregates have no lowering yet."""
+    """Emit ``==`` of two same-typed non-numeric values. The spec ("Equality
+    semantics") defines this as comparing the serialized bytes; here the same
+    answer is computed leaf by leaf, without serializing."""
     lhs_type = state.contextual_types[node.lhs]
     rhs_type = state.contextual_types[node.rhs]
     assert lhs_type == rhs_type, (lhs_type, rhs_type)
-    if not isinstance(lhs_type.llvm_type, ir.IntType):
-        raise BackendError(
-            f"LLVM backend can't compare values of type "
-            f"'{lhs_type.display_name}' yet"
-        )
     lhs = self.emit(node.lhs, state)
     rhs = self.emit(node.rhs, state)
-    return self.builder.icmp_signed("==", lhs, rhs)
+    return _emit_value_equal(self.builder, lhs, rhs)
+
+
+def _emit_value_equal(b: ir.IRBuilder, lhs: ir.Value, rhs: ir.Value) -> ir.Value:
+    """Emit ``==`` of two LLVM values of the same type with serialized-bytes
+    semantics: integers (including lowered enums and bools) compare with icmp,
+    floats compare by bit pattern rather than fcmp (so 0.0 != -0.0 and a NaN
+    equals a bit-identical NaN, exactly as their serialized bytes compare),
+    and aggregates compare leaf by leaf."""
+    llvm_type = lhs.type
+    assert llvm_type == rhs.type, (llvm_type, rhs.type)
+    if isinstance(llvm_type, ir.IntType):
+        return b.icmp_signed("==", lhs, rhs)
+    if isinstance(llvm_type, (ir.FloatType, ir.DoubleType)):
+        bits = ir.IntType(32 if isinstance(llvm_type, ir.FloatType) else 64)
+        return b.icmp_signed("==", b.bitcast(lhs, bits), b.bitcast(rhs, bits))
+    if isinstance(llvm_type, ir.LiteralStructType):
+        count = len(llvm_type.elements)
+    else:
+        assert isinstance(llvm_type, ir.ArrayType), llvm_type
+        count = llvm_type.count
+    assert count > 0, llvm_type
+    result = None
+    for i in range(count):
+        eq = _emit_value_equal(b, b.extract_value(lhs, i), b.extract_value(rhs, i))
+        result = eq if result is None else b.and_(result, eq)
+    return result
 
 
 def _emit_bytes_not_equal(
