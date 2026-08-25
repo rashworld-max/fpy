@@ -8,9 +8,7 @@ from pathlib import Path
 import struct
 from typing import Union
 
-from fpy.bytecode.assembler import read_bin_arg_specs, resolve_arg_specs
-
-from fpy.error import CompileError
+from fpy.error import CompileError, diagnostic_context
 from fpy.macros import TIME_MACRO
 from fpy.types import (
     pick_binary_op_case,
@@ -1145,100 +1143,144 @@ class CheckGlobalsInitializedBeforeCall(Visitor):
 class ResolveSequenceDependencies(TopDownVisitor):
     """Discover and resolve all sequence-run dependencies before type checking.
 
-    For each call to a seq-run command with a string-literal filename,
-    reads the target .bin header and resolves its argument types.
-    Results are stored in state.called_seq_arg_specs so that later passes
-    can use them without file I/O.
+    For each call to a seq-run command with a string-literal file name,
+    locates the target's .fpy source through the seq maps and resolves its
+    declared argument specification. Results are stored in
+    state.called_seq_arg_specs so that later passes can use them without
+    file I/O.
     """
 
-    def _get_bin_name(self, node: AstFuncCall, state: CompileState) -> str | None:
-        """Return the .bin filename for a seq-run-with-args call, or None.
+    def _target_source(self, bin_name: str, state: CompileState) -> Path | None:
+        """Return the target's .fpy source file, or None if no seq map finds one.
 
-        Reports a compile error if the filename argument is not a string literal.
+        For each mapping whose bin_prefix starts bin_name, the prefix is
+        replaced with fpy_prefix and the file name's extension with .fpy;
+        the first candidate that is an existing file wins.
         """
+        for bin_prefix, fpy_prefix in state.seq_maps:
+            if not bin_name.startswith(bin_prefix):
+                continue
+            mapped = Path(fpy_prefix + bin_name[len(bin_prefix) :])
+            if not mapped.name:
+                continue
+            source = mapped.with_suffix(".fpy")
+            if source.is_file():
+                return source
+        return None
+
+    def _resolve_type_name(self, expr: AstExpr, state: CompileState) -> FpyType | None:
+        """Resolve a type annotation expression in the base scope's type name
+        group. Returns None if the expression does not resolve to a type."""
+        attrs: list[AstGetAttr] = []
+        while is_instance_compat(expr, AstGetAttr):
+            attrs.append(expr)
+            expr = expr.parent
+        if not is_instance_compat(expr, AstIdent):
+            return None
+        sym = state.base_scope.lookup(NameGroup.TYPE, expr.name)
+        for getattr_node in reversed(attrs):
+            if not is_instance_compat(sym, ModuleSymbol):
+                return None
+            sym = sym.get(getattr_node.attr)
+        if not is_instance_compat(sym, FpyType):
+            return None
+        return sym
+
+    def _read_target_arg_specs(
+        self, source: Path, node: AstFuncCall, state: CompileState
+    ) -> list[tuple[str, FpyType]] | None:
+        """Parse the target's source and resolve its declared argument
+        specification. On failure, reports a compile error on the call's
+        file name argument and returns None."""
+        from fpy.compiler import text_to_ast
+
+        try:
+            text = source.read_text(encoding="utf-8")
+        except OSError as e:
+            state.err(
+                f"Cannot read sequence source file '{source}': {e}",
+                node.args[0],
+            )
+            return None
+        with diagnostic_context(str(source)):
+            try:
+                body = text_to_ast(text)
+            except CompileError as e:
+                # str(e) must format here, under the target's diagnostic context
+                state.err(
+                    f"Failed to parse sequence source file '{source}':\n{e}",
+                    node.args[0],
+                )
+                return None
+            target_state = CompileState()
+            CheckSequenceMetadataDefinedAtTop().run(body, target_state)
+            if target_state.errors:
+                state.err(
+                    f"Failed to compile called sequence '{source}':\n{target_state.errors[0]}",
+                    node.args[0],
+                )
+                return None
+
+        if not body.stmts or not is_instance_compat(body.stmts[0], AstSequenceMetadata):
+            return []
+        metadata = body.stmts[0]
+        if metadata.parameters is None:
+            return []
+
+        arg_specs = []
+        for arg_name, arg_type_name in metadata.parameters:
+            arg_type = self._resolve_type_name(arg_type_name, state)
+            if arg_type is None:
+                state.err(
+                    f"Failed to resolve argument types from {source}: "
+                    f"unknown type for parameter '{arg_name.name}'",
+                    node.args[0],
+                )
+                return None
+            arg_specs.append((arg_name.name, arg_type))
+        return arg_specs
+
+    def visit_AstFuncCall(self, node: AstFuncCall, state: CompileState):
         func = state.resolved_symbols.get(node.func)
         if not is_instance_compat(func, CommandSymbol) or not func.is_seq_run_with_args:
-            return None
-        if not node.args or len(node.args) < 1:
+            return
+        if not node.args:
             # Missing args will be caught by build_resolved_call_args (too few arguments)
-            return None
+            return
         file_name_arg = node.args[0]
         if not is_instance_compat(file_name_arg, AstString):
             state.err(
                 "Sequence file name must be a string literal",
                 file_name_arg,
             )
-            return None
-        return file_name_arg.value
-
-    def visit_AstFuncCall(self, node: AstFuncCall, state: CompileState):
-        bin_name = self._get_bin_name(node, state)
-        if bin_name is None or bin_name in state.called_seq_arg_specs:
             return
+        bin_name = file_name_arg.value
 
-        ground_binary_dir = state.ground_binary_dir
-        if ground_binary_dir is None:
-            state.err(
-                "Cannot resolve sequence binary path: no binary directory configured (use --ground-binary-dir / -B)",
-                node,
-            )
-            return
-
-        bin_path = Path(ground_binary_dir) / bin_name
-        if not bin_path.exists():
-            state.err(
-                f"Compiled sequence binary not found: {bin_path}",
-                node.args[0],
-            )
-            return
-
-        try:
-            arg_specs = read_bin_arg_specs(bin_path)
-        except Exception as e:
-            state.err(
-                f"Failed to read sequence binary {bin_path}: {e}",
-                node.args[0],
-            )
-            return
-
-        try:
-            target_arg_types = resolve_arg_specs(arg_specs, state.type_defs)
-        except RuntimeError as e:
-            state.err(
-                f"Failed to resolve argument types from {bin_path}: {e}",
-                node.args[0],
-            )
-            return
-
-        state.called_seq_arg_specs[bin_name] = target_arg_types
+        target_arg_specs = state.called_seq_arg_specs.get(bin_name)
+        if target_arg_specs is None:
+            if not state.seq_maps:
+                state.err(
+                    "Cannot resolve sequence source path. Use --seq-map BIN_PREFIX=FPY_PREFIX",
+                    node,
+                )
+                return
+            source = self._target_source(bin_name, state)
+            if source is None:
+                state.err(
+                    f"Sequence source file for '{bin_name}' not found",
+                    node.args[0],
+                )
+                return
+            target_arg_specs = self._read_target_arg_specs(source, node, state)
+            if target_arg_specs is None:
+                return
+            state.called_seq_arg_specs[bin_name] = target_arg_specs
 
         # Build an extended CommandSymbol that includes the target sequence's
         # parameters so that standard arg resolution works in PickTypes.
-        func = state.resolved_symbols.get(node.func)
-        extra_args = [(name, t, None) for name, t in target_arg_types]
+        extra_args = [(name, t, None) for name, t in target_arg_specs]
         extended_func = dc_replace(func, args=func.args + extra_args)
         state.resolved_symbols[node.func] = extended_func
-
-
-class CollectSequenceDependencies(ResolveSequenceDependencies):
-    """Collect .bin filenames from seq-run-with-args calls without reading binaries.
-
-    Use this instead of ResolveSequenceDependencies when you only need the
-    dependency list (e.g. the fprime-fpy-depend tool) and the binaries may
-    not exist yet.
-    """
-
-    def __init__(self):
-        super().__init__()
-        self.bin_names: list[str] = []
-        self._seen: set[str] = set()
-
-    def visit_AstFuncCall(self, node: AstFuncCall, state: CompileState):
-        bin_name = self._get_bin_name(node, state)
-        if bin_name is None or bin_name in self._seen:
-            return
-        self._seen.add(bin_name)
-        self.bin_names.append(bin_name)
 
 
 class PickTypesAndResolveFields(Visitor):

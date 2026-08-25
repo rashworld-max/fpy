@@ -46,7 +46,7 @@ def test_load_sequence_config_from_default_dictionary():
     """Test that sequence config is loaded from the standard test dictionary."""
     _clear_caches()
 
-    state = get_base_compile_state(DEFAULT_DICTIONARY, {})
+    state = get_base_compile_state(DEFAULT_DICTIONARY)
 
     # The RefTopologyDictionary.json has these values:
     # Svc.Fpy.MAX_SEQUENCE_STATEMENT_COUNT = 2048
@@ -59,7 +59,7 @@ def test_compile_state_has_sequence_config():
     """Test that CompileState is populated with sequence config from dictionary."""
     _clear_caches()
 
-    state = get_base_compile_state(DEFAULT_DICTIONARY, {})
+    state = get_base_compile_state(DEFAULT_DICTIONARY)
 
     assert state.max_directives_count == 2048
     assert state.max_directive_size == 2048
@@ -110,7 +110,7 @@ def test_custom_max_directives_count():
     )
 
     try:
-        state = get_base_compile_state(dict_path, {})
+        state = get_base_compile_state(dict_path)
         assert state.max_directives_count == custom_count
         # max_directive_size should still come from the base dictionary
         assert state.max_directive_size == 2048
@@ -137,7 +137,7 @@ def test_custom_max_directive_size():
     )
 
     try:
-        state = get_base_compile_state(dict_path, {})
+        state = get_base_compile_state(dict_path)
         assert state.max_directive_size == custom_size
         # max_directives_count should still come from the base dictionary
         assert state.max_directives_count == 2048
@@ -172,7 +172,7 @@ def test_custom_both_limits():
     )
 
     try:
-        state = get_base_compile_state(dict_path, {})
+        state = get_base_compile_state(dict_path)
         assert state.max_directives_count == custom_count
         assert state.max_directive_size == custom_size
     finally:
@@ -201,7 +201,7 @@ def test_missing_constants_use_defaults():
         json.dump(dict_json, f)
 
     try:
-        state = get_base_compile_state(dict_path, {})
+        state = get_base_compile_state(dict_path)
         assert state.max_directives_count == DEFAULT_MAX_DIRECTIVES_COUNT
         assert state.max_directive_size == DEFAULT_MAX_DIRECTIVE_SIZE
         assert state.max_seq_arg_count == DEFAULT_MAX_SEQ_ARG_COUNT
@@ -236,7 +236,6 @@ def test_too_many_directives_with_custom_limit():
         fpy.error.file_name = "<test>"
         state = get_base_compile_state(dict_path)
         body = text_to_ast(seq)
-        assert body is not None
 
         # Should fail because we exceed the custom limit
         with pytest.raises(fpy.error.BackendError) as exc_info:
@@ -273,7 +272,6 @@ def test_within_custom_limit_succeeds():
         fpy.error.file_name = "<test>"
         state = get_base_compile_state(dict_path)
         body = text_to_ast(seq)
-        assert body is not None
 
         # Should succeed
         state = analyze_ast(body, state)
@@ -304,7 +302,7 @@ def test_load_fw_serialize_from_default_dictionary():
     _clear_caches()
     from fpy.types import BOOL, FpyValue
 
-    get_base_compile_state(DEFAULT_DICTIONARY, {})
+    get_base_compile_state(DEFAULT_DICTIONARY)
 
     # The RefTopologyDictionary.json has FW_SERIALIZE_TRUE_VALUE=255, FALSE=0
     assert fpy.types.FW_SERIALIZE_TRUE_VALUE == 0xFF
@@ -331,7 +329,7 @@ def test_custom_fw_serialize_values():
     )
 
     try:
-        get_base_compile_state(dict_path, {})
+        get_base_compile_state(dict_path)
         assert fpy.types.FW_SERIALIZE_TRUE_VALUE == 1
         assert fpy.types.FW_SERIALIZE_FALSE_VALUE == 2
         # Booleans now serialize using the dictionary-provided wire values.
@@ -367,7 +365,7 @@ def test_missing_fw_serialize_use_defaults():
         json.dump(dict_json, f)
 
     try:
-        get_base_compile_state(dict_path, {})
+        get_base_compile_state(dict_path)
         assert fpy.types.FW_SERIALIZE_TRUE_VALUE == DEFAULT_FW_SERIALIZE_TRUE_VALUE
         assert fpy.types.FW_SERIALIZE_FALSE_VALUE == DEFAULT_FW_SERIALIZE_FALSE_VALUE
     finally:
@@ -426,7 +424,7 @@ def test_timebase_loaded_from_dictionary():
     _clear_caches()
     from fpy.types import TIME_BASE
 
-    state = get_base_compile_state(DEFAULT_DICTIONARY, {})
+    state = get_base_compile_state(DEFAULT_DICTIONARY)
 
     # The RefTopologyDictionary has these TimeBase constants:
     assert TIME_BASE.enum_dict == {
@@ -443,7 +441,7 @@ def test_timebase_rep_type_from_dictionary():
     _clear_caches()
     from fpy.types import TIME_BASE, U16
 
-    state = get_base_compile_state(DEFAULT_DICTIONARY, {})
+    state = get_base_compile_state(DEFAULT_DICTIONARY)
 
     # RefTopologyDictionary has representationType U16
     assert TIME_BASE.rep_type == U16
@@ -464,7 +462,7 @@ def test_timebase_custom_rep_type():
     )
 
     try:
-        state = get_base_compile_state(dict_path, {})
+        state = get_base_compile_state(dict_path)
         assert TIME_BASE.rep_type == U32
     finally:
         Path(dict_path).unlink()
@@ -482,7 +480,7 @@ def test_timebase_missing_raises_error():
 
         # Dictionary parsing fails because Fw.TimeValue depends on TimeBase
         with pytest.raises(AssertionError, match="Could not resolve types"):
-            get_base_compile_state(dict_path, {})
+            get_base_compile_state(dict_path)
     finally:
         Path(dict_path).unlink()
         _clear_caches()
@@ -504,7 +502,7 @@ def test_timebase_missing_tb_none_raises_error():
         from fpy.error import DictionaryError
 
         with pytest.raises(DictionaryError, match="must include TB_NONE"):
-            get_base_compile_state(dict_path, {})
+            get_base_compile_state(dict_path)
     finally:
         Path(dict_path).unlink()
         _clear_caches()
@@ -526,7 +524,7 @@ def test_timebase_tb_none_wrong_value_raises_error():
         from fpy.error import DictionaryError
 
         with pytest.raises(DictionaryError, match="TB_NONE constant must have value 0"):
-            get_base_compile_state(dict_path, {})
+            get_base_compile_state(dict_path)
     finally:
         Path(dict_path).unlink()
         _clear_caches()
@@ -546,7 +544,6 @@ t: Fw.Time = Fw.Time(TimeBase.TB_SC_TIME, 0, 100, 0)
 
     state = get_base_compile_state(DEFAULT_DICTIONARY)
     body = text_to_ast(seq)
-    assert body is not None
 
     state = analyze_ast(body, state)
     analysis_to_fpybc_directives(state)
@@ -565,7 +562,6 @@ def _compile(dict_path: str, seq: str):
     fpy.error.input_lines = seq.splitlines()
     state = get_base_compile_state(dict_path)
     body = text_to_ast(seq)
-    assert body is not None
     state = analyze_ast(body, state)
     return analysis_to_fpybc_directives(state)
 
@@ -585,7 +581,7 @@ def test_new_limits_loaded_from_default_dictionary():
     """The Ref dictionary's limit constants all land in CompileState."""
     _clear_caches()
 
-    state = get_base_compile_state(DEFAULT_DICTIONARY, {})
+    state = get_base_compile_state(DEFAULT_DICTIONARY)
 
     assert state.max_seq_arg_count == 16
     assert state.max_stack_size == 65535
@@ -735,7 +731,7 @@ def test_cmd_size_checks_skipped_without_dictionary_constants():
         json.dump(dict_json, f)
 
     try:
-        state = get_base_compile_state(dict_path, {})
+        state = get_base_compile_state(dict_path)
         assert state.com_buffer_max_size is None
         assert state.cmd_arg_buffer_max_size is None
         _clear_caches()
@@ -794,7 +790,7 @@ def test_param_valid_mismatch_raises_error():
         from fpy.error import DictionaryError
 
         with pytest.raises(DictionaryError, match="Fw.ParamValid"):
-            get_base_compile_state(dict_path, {})
+            get_base_compile_state(dict_path)
     finally:
         Path(dict_path).unlink()
         _clear_caches()
@@ -808,7 +804,7 @@ def test_param_valid_absent_is_tolerated():
     dict_path = _create_test_dict_with_modified_type("Fw.ParamValid", None)
 
     try:
-        state = get_base_compile_state(dict_path, {})
+        state = get_base_compile_state(dict_path)
         assert state is not None
     finally:
         Path(dict_path).unlink()
