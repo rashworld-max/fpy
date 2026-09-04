@@ -25,7 +25,12 @@ from fpy.state import (
     _build_global_scopes,
 )
 from fpy.dictionary import load_dictionary
-from fpy.types import DEFAULT_MAX_DIRECTIVES_COUNT, DEFAULT_MAX_DIRECTIVE_SIZE
+from fpy.types import (
+    DEFAULT_MAX_DIRECTIVES_COUNT,
+    DEFAULT_MAX_DIRECTIVE_SIZE,
+    DEFAULT_MAX_SEQ_ARG_COUNT,
+    DEFAULT_MAX_STACK_SIZE,
+)
 
 # Path to the test dictionary
 DEFAULT_DICTIONARY = str(Path(__file__).parent / "RefTopologyDictionary.json")
@@ -41,7 +46,7 @@ def test_load_sequence_config_from_default_dictionary():
     """Test that sequence config is loaded from the standard test dictionary."""
     _clear_caches()
 
-    state = get_base_compile_state(DEFAULT_DICTIONARY, {})
+    state = get_base_compile_state(DEFAULT_DICTIONARY)
 
     # The RefTopologyDictionary.json has these values:
     # Svc.Fpy.MAX_SEQUENCE_STATEMENT_COUNT = 2048
@@ -54,7 +59,7 @@ def test_compile_state_has_sequence_config():
     """Test that CompileState is populated with sequence config from dictionary."""
     _clear_caches()
 
-    state = get_base_compile_state(DEFAULT_DICTIONARY, {})
+    state = get_base_compile_state(DEFAULT_DICTIONARY)
 
     assert state.max_directives_count == 2048
     assert state.max_directive_size == 2048
@@ -105,7 +110,7 @@ def test_custom_max_directives_count():
     )
 
     try:
-        state = get_base_compile_state(dict_path, {})
+        state = get_base_compile_state(dict_path)
         assert state.max_directives_count == custom_count
         # max_directive_size should still come from the base dictionary
         assert state.max_directive_size == 2048
@@ -132,7 +137,7 @@ def test_custom_max_directive_size():
     )
 
     try:
-        state = get_base_compile_state(dict_path, {})
+        state = get_base_compile_state(dict_path)
         assert state.max_directive_size == custom_size
         # max_directives_count should still come from the base dictionary
         assert state.max_directives_count == 2048
@@ -167,7 +172,7 @@ def test_custom_both_limits():
     )
 
     try:
-        state = get_base_compile_state(dict_path, {})
+        state = get_base_compile_state(dict_path)
         assert state.max_directives_count == custom_count
         assert state.max_directive_size == custom_size
     finally:
@@ -196,9 +201,11 @@ def test_missing_constants_use_defaults():
         json.dump(dict_json, f)
 
     try:
-        state = get_base_compile_state(dict_path, {})
+        state = get_base_compile_state(dict_path)
         assert state.max_directives_count == DEFAULT_MAX_DIRECTIVES_COUNT
         assert state.max_directive_size == DEFAULT_MAX_DIRECTIVE_SIZE
+        assert state.max_seq_arg_count == DEFAULT_MAX_SEQ_ARG_COUNT
+        assert state.max_stack_size == DEFAULT_MAX_STACK_SIZE
     finally:
         Path(dict_path).unlink()
         _clear_caches()
@@ -229,7 +236,6 @@ def test_too_many_directives_with_custom_limit():
         fpy.error.file_name = "<test>"
         state = get_base_compile_state(dict_path)
         body = text_to_ast(seq)
-        assert body is not None
 
         # Should fail because we exceed the custom limit
         with pytest.raises(fpy.error.BackendError) as exc_info:
@@ -266,7 +272,6 @@ def test_within_custom_limit_succeeds():
         fpy.error.file_name = "<test>"
         state = get_base_compile_state(dict_path)
         body = text_to_ast(seq)
-        assert body is not None
 
         # Should succeed
         state = analyze_ast(body, state)
@@ -297,7 +302,7 @@ def test_load_fw_serialize_from_default_dictionary():
     _clear_caches()
     from fpy.types import BOOL, FpyValue
 
-    get_base_compile_state(DEFAULT_DICTIONARY, {})
+    get_base_compile_state(DEFAULT_DICTIONARY)
 
     # The RefTopologyDictionary.json has FW_SERIALIZE_TRUE_VALUE=255, FALSE=0
     assert fpy.types.FW_SERIALIZE_TRUE_VALUE == 0xFF
@@ -324,7 +329,7 @@ def test_custom_fw_serialize_values():
     )
 
     try:
-        get_base_compile_state(dict_path, {})
+        get_base_compile_state(dict_path)
         assert fpy.types.FW_SERIALIZE_TRUE_VALUE == 1
         assert fpy.types.FW_SERIALIZE_FALSE_VALUE == 2
         # Booleans now serialize using the dictionary-provided wire values.
@@ -360,7 +365,7 @@ def test_missing_fw_serialize_use_defaults():
         json.dump(dict_json, f)
 
     try:
-        get_base_compile_state(dict_path, {})
+        get_base_compile_state(dict_path)
         assert fpy.types.FW_SERIALIZE_TRUE_VALUE == DEFAULT_FW_SERIALIZE_TRUE_VALUE
         assert fpy.types.FW_SERIALIZE_FALSE_VALUE == DEFAULT_FW_SERIALIZE_FALSE_VALUE
     finally:
@@ -419,7 +424,7 @@ def test_timebase_loaded_from_dictionary():
     _clear_caches()
     from fpy.types import TIME_BASE
 
-    state = get_base_compile_state(DEFAULT_DICTIONARY, {})
+    state = get_base_compile_state(DEFAULT_DICTIONARY)
 
     # The RefTopologyDictionary has these TimeBase constants:
     assert TIME_BASE.enum_dict == {
@@ -436,7 +441,7 @@ def test_timebase_rep_type_from_dictionary():
     _clear_caches()
     from fpy.types import TIME_BASE, U16
 
-    state = get_base_compile_state(DEFAULT_DICTIONARY, {})
+    state = get_base_compile_state(DEFAULT_DICTIONARY)
 
     # RefTopologyDictionary has representationType U16
     assert TIME_BASE.rep_type == U16
@@ -457,7 +462,7 @@ def test_timebase_custom_rep_type():
     )
 
     try:
-        state = get_base_compile_state(dict_path, {})
+        state = get_base_compile_state(dict_path)
         assert TIME_BASE.rep_type == U32
     finally:
         Path(dict_path).unlink()
@@ -475,7 +480,7 @@ def test_timebase_missing_raises_error():
 
         # Dictionary parsing fails because Fw.TimeValue depends on TimeBase
         with pytest.raises(AssertionError, match="Could not resolve types"):
-            get_base_compile_state(dict_path, {})
+            get_base_compile_state(dict_path)
     finally:
         Path(dict_path).unlink()
         _clear_caches()
@@ -497,7 +502,7 @@ def test_timebase_missing_tb_none_raises_error():
         from fpy.error import DictionaryError
 
         with pytest.raises(DictionaryError, match="must include TB_NONE"):
-            get_base_compile_state(dict_path, {})
+            get_base_compile_state(dict_path)
     finally:
         Path(dict_path).unlink()
         _clear_caches()
@@ -519,7 +524,7 @@ def test_timebase_tb_none_wrong_value_raises_error():
         from fpy.error import DictionaryError
 
         with pytest.raises(DictionaryError, match="TB_NONE constant must have value 0"):
-            get_base_compile_state(dict_path, {})
+            get_base_compile_state(dict_path)
     finally:
         Path(dict_path).unlink()
         _clear_caches()
@@ -539,7 +544,316 @@ t: Fw.Time = Fw.Time(TimeBase.TB_SC_TIME, 0, 100, 0)
 
     state = get_base_compile_state(DEFAULT_DICTIONARY)
     body = text_to_ast(seq)
-    assert body is not None
 
     state = analyze_ast(body, state)
     analysis_to_fpybc_directives(state)
+
+
+def test_default_time_base():
+    """The default time base is the timeBase default of the Fw.TimeValue ctor
+    and of time()."""
+    _clear_caches()
+    from fpy.macros import TIME_MACRO
+    from fpy.types import TIME
+
+    state = get_base_compile_state(DEFAULT_DICTIONARY)
+
+    assert state.type_ctors[TIME].args[0][2].val == "TB_WORKSTATION_TIME"
+    assert TIME_MACRO.args[1][2].val == "TB_WORKSTATION_TIME"
+
+
+def test_default_time_base_override():
+    """default_time_base overrides the timeBase default, and a subsequent
+    compile with a different choice is not affected by the cached scopes."""
+    _clear_caches()
+    from fpy.macros import TIME_MACRO
+    from fpy.types import TIME
+
+    state = get_base_compile_state(DEFAULT_DICTIONARY, default_time_base="TB_SC_TIME")
+    assert state.type_ctors[TIME].args[0][2].val == "TB_SC_TIME"
+    assert TIME_MACRO.args[1][2].val == "TB_SC_TIME"
+
+    state = get_base_compile_state(DEFAULT_DICTIONARY)
+    assert state.type_ctors[TIME].args[0][2].val == "TB_WORKSTATION_TIME"
+    assert TIME_MACRO.args[1][2].val == "TB_WORKSTATION_TIME"
+
+    # This hits the cache from the first call; time()'s default must follow.
+    state = get_base_compile_state(DEFAULT_DICTIONARY, default_time_base="TB_SC_TIME")
+    assert state.type_ctors[TIME].args[0][2].val == "TB_SC_TIME"
+    assert TIME_MACRO.args[1][2].val == "TB_SC_TIME"
+
+    _clear_caches()
+
+
+def test_default_time_base_not_in_dictionary_raises_error():
+    """A default time base that is not a constant of the dictionary's TimeBase
+    enum raises an error."""
+    _clear_caches()
+    from fpy.error import DictionaryError
+
+    with pytest.raises(DictionaryError, match="not one of its constants"):
+        get_base_compile_state(DEFAULT_DICTIONARY, default_time_base="TB_BOGUS")
+
+    _clear_caches()
+
+
+# ============================================================================
+# FpySequencer limit checks: MAX_SEQUENCE_ARG_COUNT, MAX_STACK_SIZE,
+# MAX_DIRECTIVE_SIZE, FW_COM_BUFFER_MAX_SIZE, FW_CMD_ARG_BUFFER_MAX_SIZE
+# ============================================================================
+
+
+def _compile(dict_path: str, seq: str):
+    """Compile *seq* against *dict_path* all the way to fpybc directives."""
+    fpy.error.file_name = "<test>"
+    fpy.error.input_text = seq
+    fpy.error.input_lines = seq.splitlines()
+    state = get_base_compile_state(dict_path)
+    body = text_to_ast(seq)
+    state = analyze_ast(body, state)
+    return analysis_to_fpybc_directives(state)
+
+
+def svc_fpy_constant(name: str, value: int) -> dict:
+    """Build a dictionary constant descriptor for an integer limit."""
+    return {
+        "kind": "constant",
+        "qualifiedName": name,
+        "type": {"name": "U64", "kind": "integer", "size": 64, "signed": False},
+        "value": value,
+        "annotation": f"Custom {name} for testing",
+    }
+
+
+def test_new_limits_loaded_from_default_dictionary():
+    """The Ref dictionary's limit constants all land in CompileState."""
+    _clear_caches()
+
+    state = get_base_compile_state(DEFAULT_DICTIONARY)
+
+    assert state.max_seq_arg_count == 16
+    assert state.max_stack_size == 65535
+    assert state.com_buffer_max_size == 512
+    assert state.cmd_arg_buffer_max_size == 506
+    assert state.cmd_names_by_opcode  # populated from the dictionary
+
+
+def test_seq_arg_count_exceeding_custom_limit_fails():
+    """More sequence args than Svc.Fpy.MAX_SEQUENCE_ARG_COUNT is a compile error."""
+    _clear_caches()
+    dict_path = create_test_dictionary(
+        [svc_fpy_constant("Svc.Fpy.MAX_SEQUENCE_ARG_COUNT", 2)]
+    )
+    try:
+        with pytest.raises(fpy.error.CompileError) as exc_info:
+            _compile(dict_path, "sequence(a: U8, b: U8, c: U8)\n")
+        assert "MAX_SEQUENCE_ARG_COUNT" in str(exc_info.value)
+
+        # at the limit is fine
+        _compile(dict_path, "sequence(a: U8, b: U8)\n")
+    finally:
+        Path(dict_path).unlink()
+        _clear_caches()
+
+
+def test_seq_arg_count_exceeding_default_limit_fails():
+    """17 sequence args exceeds the Ref dictionary's MAX_SEQUENCE_ARG_COUNT of 16."""
+    _clear_caches()
+    args = ", ".join(f"a{i}: U8" for i in range(17))
+    with pytest.raises(fpy.error.CompileError) as exc_info:
+        _compile(DEFAULT_DICTIONARY, f"sequence({args})\n")
+    assert "MAX_SEQUENCE_ARG_COUNT" in str(exc_info.value)
+    _clear_caches()
+
+
+def test_seq_arg_total_size_exceeding_stack_size_fails():
+    """Total sequence arg bytes above Svc.Fpy.MAX_STACK_SIZE is a compile error."""
+    _clear_caches()
+    dict_path = create_test_dictionary([svc_fpy_constant("Svc.Fpy.MAX_STACK_SIZE", 8)])
+    try:
+        with pytest.raises(fpy.error.CompileError) as exc_info:
+            _compile(dict_path, "sequence(a: U64, b: U64)\n")
+        assert "MAX_STACK_SIZE" in str(exc_info.value)
+    finally:
+        Path(dict_path).unlink()
+        _clear_caches()
+
+
+def test_seq_arg_total_size_exceeding_seq_args_buffer_fails():
+    """Sequence args that cannot fit in the Svc.SeqArgs buffer are a compile error."""
+    _clear_caches()
+    # 13 x Ref.DpDemo.U32Array (20 bytes each) = 260 > the 255-byte SeqArgs buffer,
+    # while the arg count (13) is within MAX_SEQUENCE_ARG_COUNT (16)
+    args = ", ".join(f"a{i}: Ref.DpDemo.U32Array" for i in range(13))
+    with pytest.raises(fpy.error.CompileError) as exc_info:
+        _compile(DEFAULT_DICTIONARY, f"sequence({args})\n")
+    assert "SeqArgs buffer capacity" in str(exc_info.value)
+    _clear_caches()
+
+
+def test_directive_size_exceeding_custom_limit_fails():
+    """A directive larger than the dictionary's MAX_DIRECTIVE_SIZE is a compile error."""
+    _clear_caches()
+    dict_path = create_test_dictionary(
+        [svc_fpy_constant("Svc.Fpy.MAX_DIRECTIVE_SIZE", 16)]
+    )
+    try:
+        # CONST_CMD with a 39-char string arg serializes to ~48 bytes > 16
+        arg = "a" * 39
+        with pytest.raises(fpy.error.BackendError) as exc_info:
+            _compile(dict_path, f'CdhCore.cmdDisp.CMD_NO_OP_STRING("{arg}")\n')
+        assert "too large" in str(exc_info.value)
+        # the error must point at the source line that generated the directive
+        assert "<test>:1" in str(exc_info.value)
+    finally:
+        Path(dict_path).unlink()
+        _clear_caches()
+
+
+def test_cmd_args_exceeding_cmd_arg_buffer_fails():
+    """Command args above FW_CMD_ARG_BUFFER_MAX_SIZE are a compile error."""
+    _clear_caches()
+    dict_path = create_test_dictionary(
+        [svc_fpy_constant("FW_CMD_ARG_BUFFER_MAX_SIZE", 8)]
+    )
+    try:
+        # string args serialize as a 2-byte length + the bytes: 2 + 39 > 8
+        arg = "a" * 39
+        with pytest.raises(fpy.error.BackendError) as exc_info:
+            _compile(dict_path, f'CdhCore.cmdDisp.CMD_NO_OP_STRING("{arg}")\n')
+        assert "FW_CMD_ARG_BUFFER_MAX_SIZE" in str(exc_info.value)
+        assert "CdhCore.cmdDisp.CMD_NO_OP_STRING" in str(exc_info.value)
+        assert "<test>:1" in str(exc_info.value)
+
+        # a command with no args is fine
+        _compile(dict_path, "CdhCore.cmdDisp.CMD_NO_OP()\n")
+
+        # a non-const arg forces the STACK_CMD path; the error must still
+        # name the command (arg bytes: I32 + F32 + U8 = 9 > 8)
+        seq = "x: I32 = 1\nCdhCore.cmdDisp.CMD_TEST_CMD_1(x, 2.0, 3)\n"
+        with pytest.raises(fpy.error.BackendError) as exc_info:
+            _compile(dict_path, seq)
+        assert "FW_CMD_ARG_BUFFER_MAX_SIZE" in str(exc_info.value)
+        assert "CdhCore.cmdDisp.CMD_TEST_CMD_1" in str(exc_info.value)
+        assert "<test>:2" in str(exc_info.value)
+    finally:
+        Path(dict_path).unlink()
+        _clear_caches()
+
+
+def test_cmd_packet_exceeding_com_buffer_fails():
+    """A command packet above FW_COM_BUFFER_MAX_SIZE is a compile error."""
+    _clear_caches()
+    # keep FW_CMD_ARG_BUFFER_MAX_SIZE permissive so the com buffer check fires
+    dict_path = create_test_dictionary(
+        [
+            svc_fpy_constant("FW_COM_BUFFER_MAX_SIZE", 16),
+            svc_fpy_constant("FW_CMD_ARG_BUFFER_MAX_SIZE", 506),
+        ]
+    )
+    try:
+        # packet = descriptor (2, Ref FwPacketDescriptorType is U16) + opcode (4)
+        # + args (2 + 39) = 47 > 16
+        arg = "a" * 39
+        with pytest.raises(fpy.error.BackendError) as exc_info:
+            _compile(dict_path, f'CdhCore.cmdDisp.CMD_NO_OP_STRING("{arg}")\n')
+        assert "FW_COM_BUFFER_MAX_SIZE" in str(exc_info.value)
+    finally:
+        Path(dict_path).unlink()
+        _clear_caches()
+
+
+def test_cmd_size_checks_skipped_without_dictionary_constants():
+    """Without the FW_* buffer constants in the dictionary, no cmd size check runs."""
+    _clear_caches()
+    dict_path = create_test_dictionary([])
+    with open(dict_path, "r") as f:
+        dict_json = json.load(f)
+    dict_json["constants"] = [
+        c
+        for c in dict_json.get("constants", [])
+        if c.get("qualifiedName")
+        not in ("FW_COM_BUFFER_MAX_SIZE", "FW_CMD_ARG_BUFFER_MAX_SIZE")
+    ]
+    with open(dict_path, "w") as f:
+        json.dump(dict_json, f)
+
+    try:
+        state = get_base_compile_state(dict_path)
+        assert state.com_buffer_max_size is None
+        assert state.cmd_arg_buffer_max_size is None
+        _clear_caches()
+
+        arg = "a" * 39
+        _compile(dict_path, f'CdhCore.cmdDisp.CMD_NO_OP_STRING("{arg}")\n')
+    finally:
+        Path(dict_path).unlink()
+        _clear_caches()
+
+
+# ============================================================================
+# Validity enum validation (Fw.TlmValid / Fw.ParamValid)
+# ============================================================================
+
+
+def _create_test_dict_with_modified_type(qualified_name: str, mutate) -> str:
+    """Create a test dictionary with one type definition passed through
+    *mutate* (a function of the JSON type def), or removed when *mutate* is
+    None."""
+    with open(DEFAULT_DICTIONARY, "r") as f:
+        base_dict = json.load(f)
+
+    defs = base_dict["typeDefinitions"]
+    if mutate is None:
+        base_dict["typeDefinitions"] = [
+            t for t in defs if t.get("qualifiedName") != qualified_name
+        ]
+    else:
+        for type_def in defs:
+            if type_def.get("qualifiedName") == qualified_name:
+                mutate(type_def)
+                break
+
+    temp_file = tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False)
+    json.dump(base_dict, temp_file)
+    temp_file.close()
+    return temp_file.name
+
+
+def test_param_valid_mismatch_raises_error():
+    """A dictionary whose Fw.ParamValid disagrees with the canonical enum is
+    rejected: the compiled code bakes the canonical VALID value into every
+    parameter read's validity check."""
+    _clear_caches()
+
+    def swap_valid(type_def):
+        for const in type_def["enumeratedConstants"]:
+            if const["name"] == "VALID":
+                const["value"] = 9
+
+    dict_path = _create_test_dict_with_modified_type("Fw.ParamValid", swap_valid)
+
+    try:
+        import pytest
+        from fpy.error import DictionaryError
+
+        with pytest.raises(DictionaryError, match="Fw.ParamValid"):
+            get_base_compile_state(dict_path)
+    finally:
+        Path(dict_path).unlink()
+        _clear_caches()
+
+
+def test_param_valid_absent_is_tolerated():
+    """The validity enums are port argument types most dictionaries never
+    define; their absence leaves the canonical definitions standing."""
+    _clear_caches()
+
+    dict_path = _create_test_dict_with_modified_type("Fw.ParamValid", None)
+
+    try:
+        state = get_base_compile_state(dict_path)
+        assert state is not None
+    finally:
+        Path(dict_path).unlink()
+        _clear_caches()

@@ -650,7 +650,7 @@ If `persist` or `freq` is provided, and they cannot be coerced to [`Fw.TimeInter
 At execution:
 1. `persist` and `freq` are evaluated and stored. If `timeout` is not `never`, it is evaluated as a relative interval and the timeout deadline is stored as that interval added to the current time.
 2. If `persist` is not provided, its stored value is a zero-duration `Fw.TimeIntervalValue`.
-3. If `freq` is not provided, its stored value is a one-second `Fw.TimeIntervalValue`.
+3. If `freq` is not provided, its stored value is a zero-duration `Fw.TimeIntervalValue`.
 4. If `timeout` is not `never` and the current time is [greater](todo) than the stored timeout deadline, the check times out.
 5. Evaluate `condition`.
 6. If `condition` has evaluated to `True` for duration greater than or equal to `persist`'s stored value, execute `body`, then continue execution after the check statement.
@@ -1274,7 +1274,7 @@ Both operands are promoted to `F64`, and the result is always an `F64`. This mea
 #### Floor division semantics
 The floor division operator is `//`. It requires numeric operands and rounds the quotient toward negative infinity (Python `//` semantics).
 
-With integer operands, the result is the largest integer not greater than the exact quotient: `-7 // 2` evaluates to `-4`. The one signed quotient that overflows, `(-2**63) // -1` (its true value `2**63` is not representable in `I64`), raises a runtime error (`ARITHMETIC_OVERFLOW`).
+With integer operands, the result is the largest integer not greater than the exact quotient: `-7 // 2` evaluates to `-4`. A zero divisor raises a runtime error (`DOMAIN_ERROR`). The one signed quotient that overflows, `(-2**63) // -1` (its true value `2**63` is not representable in `I64`), raises a runtime error (`ARITHMETIC_OVERFLOW`).
 
 If either operand is a float, both are promoted to `F64`. The quotient is computed by IEEE 754 division and then floored toward negative infinity (the IEEE 754 `roundToIntegralTowardNegative` operation):
 

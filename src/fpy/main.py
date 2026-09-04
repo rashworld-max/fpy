@@ -17,13 +17,10 @@ from fpy.bytecode.assembler import (
     deserialize_directives,
     fpybc_directives_to_fpyasm,
     parse as fpybc_parse,
-    resolve_arg_specs,
     serialize_directives,
 )
 from fpy.bytecode.directives import ConstCmdDirective, StackCmdDirective
 import fpy.error
-import fpy.model
-from fpy.model import DirectiveErrorCode, FpySequencerModel
 from fpy.compiler import (
     analysis_to_llvm_module,
     analysis_to_wasm,
@@ -31,10 +28,9 @@ from fpy.compiler import (
     analyze_ast,
     text_to_ast,
     analysis_to_fpybc_directives,
-    ast_to_dependencies,
 )
-from fpy.dictionary import load_dictionary
 from fpy.state import get_base_compile_state
+from fpy.types import DEFAULT_TIME_BASE
 from fpy.error import parse_warning_set
 
 
@@ -66,6 +62,52 @@ def get_backend_version_str() -> str | None:
     except fpy.error.BackendError:
         return None
     return backend_version_str()
+
+
+def parse_seq_maps(specs: list[str]) -> list[tuple[str, str]]:
+    """Parse repeated --seq-map values ('BIN_PREFIX=FPY_PREFIX') into ordered
+    (bin_prefix, fpy_prefix) pairs. Raises ValueError on a value with no '='."""
+    maps = []
+    for spec in specs:
+        if "=" not in spec:
+            raise ValueError(
+                f"Invalid --seq-map value {spec!r} (expected BIN_PREFIX=FPY_PREFIX)"
+            )
+        bin_prefix, fpy_prefix = spec.split("=", 1)
+        maps.append((bin_prefix, fpy_prefix))
+    return maps
+
+
+def _add_time_base_argument(arg_parser: argparse.ArgumentParser):
+    arg_parser.add_argument(
+        "--time-base",
+        type=str,
+        default=DEFAULT_TIME_BASE,
+        metavar="CONSTANT",
+        dest="time_base",
+        help=(
+            "TimeBase enum constant used as the default timeBase of time() "
+            f"and of the Fw.TimeValue constructor (default: {DEFAULT_TIME_BASE}). "
+            "Must be a constant of the dictionary's TimeBase enum."
+        ),
+    )
+
+
+def _add_seq_map_argument(arg_parser: argparse.ArgumentParser):
+    arg_parser.add_argument(
+        "--seq-map",
+        action="append",
+        default=[],
+        metavar="BIN_PREFIX=FPY_PREFIX",
+        dest="seq_map",
+        help=(
+            "Map a called sequence's onboard binary path to its .fpy source "
+            "(repeatable): a path starting with BIN_PREFIX has that prefix "
+            "replaced with FPY_PREFIX and its extension replaced with .fpy; "
+            "the first mapping that yields an existing file wins. An empty "
+            "BIN_PREFIX matches every path."
+        ),
+    )
 
 
 def compile_main(args: list[str] = None):
@@ -110,14 +152,8 @@ def compile_main(args: list[str] = None):
         default=False,
         help="Pass this to print out compiler debugging information",
     )
-    arg_parser.add_argument(
-        "-g",
-        "--ground-binary-dir",
-        type=Path,
-        required=False,
-        default=None,
-        help="Local directory to resolve Fpy binary file paths. Needed for sequence argument type checking when calling sequences (default: input file directory)",
-    )
+    _add_seq_map_argument(arg_parser)
+    _add_time_base_argument(arg_parser)
     arg_parser.add_argument(
         "-i",
         "--imports",
@@ -155,6 +191,7 @@ def compile_main(args: list[str] = None):
     try:
         ignored_warnings = parse_warning_set(parsed_args.ignore)
         error_warnings = parse_warning_set(parsed_args.error)
+        seq_maps = parse_seq_maps(parsed_args.seq_map)
     except ValueError as e:
         print(e, file=sys.stderr)
         sys.exit(1)
@@ -172,10 +209,6 @@ def compile_main(args: list[str] = None):
         sys.exit(1)
     fpy.error.file_name = str(parsed_args.input)
 
-    ground_binary_dir = parsed_args.ground_binary_dir
-    if ground_binary_dir is None:
-        ground_binary_dir = parsed_args.input.parent
-
     # The import directories are the -i/--imports directories, in order; the
     # input file's own directory anchors its relative imports but is not
     # among them. Exact duplicate directories are dropped: a repeated -i
@@ -188,12 +221,13 @@ def compile_main(args: list[str] = None):
     try:
         state = get_base_compile_state(
             str(parsed_args.dictionary.resolve()),
-            str(ground_binary_dir.resolve()),
+            seq_maps,
             ignored_warnings=ignored_warnings,
             error_warnings=error_warnings,
             import_directories=import_directories,
             main_file_dir=str(parsed_args.input.parent.resolve()),
             main_file_path=str(parsed_args.input.resolve()),
+            default_time_base=parsed_args.time_base,
         )
     except fpy.error.DictionaryError as e:
         print(e, file=sys.stderr)
@@ -265,82 +299,19 @@ def compile_main(args: list[str] = None):
         if output_path is None:
             output_path = parsed_args.input.with_suffix(".bin")
         arg_specs = [(name, t.name, t.max_size) for name, t in seq_arg_types]
-        output_bytes, crc = serialize_directives(output, arg_specs)
+        try:
+            output_bytes, crc = serialize_directives(
+                output, arg_specs, max_directive_size=state.max_directive_size
+            )
+        except fpy.error.BackendError as e:
+            print(e, file=sys.stderr)
+            sys.exit(1)
         output_path.write_bytes(output_bytes)
         print(
             f"{output_path}\nCRC {hex(crc)} size {human_readable_size(len(output_bytes))}"
         )
     else:
         assert False, parsed_args.emit
-
-
-def model_main(args: list[str] = None):
-    arg_parser = argparse.ArgumentParser(
-        description=f"FpySequencer model for testing {get_version_str()}"
-    )
-    arg_parser.add_argument(
-        "--version", action="version", version=f"%(prog)s {get_version_str()}"
-    )
-    arg_parser.add_argument("input", type=Path, help="The input .bin file")
-    arg_parser.add_argument(
-        "--debug",
-        action="store_true",
-        help="Whether or not to print debug info during sequence execution",
-    )
-    arg_parser.add_argument(
-        "--args",
-        type=str,
-        default=None,
-        help="Hex-encoded sequence arguments (e.g. '0000002a' for U32 value 42)",
-    )
-    arg_parser.add_argument(
-        "--dictionary",
-        type=Path,
-        default=None,
-        help="Path to JSON dictionary (required when sequence has arguments)",
-    )
-
-    if args is not None:
-        args = arg_parser.parse_args(args)
-    else:
-        args = arg_parser.parse_args()
-
-    if not args.input.exists():
-        print(f"Input file {args.input} does not exist")
-        sys.exit(1)
-
-    if args.debug:
-        fpy.model.debug = True
-
-    directives, arg_specs = deserialize_directives(args.input.read_bytes())
-
-    # Reconstruct FpyType list from deserialized (name, size) specs
-    arg_types = []
-    if len(arg_specs) > 0:
-        if args.dictionary is None:
-            print(
-                f"Must pass --dictionary when sequence has arguments", file=sys.stderr
-            )
-            sys.exit(1)
-        type_defs = load_dictionary(str(args.dictionary))["type_defs"]
-        try:
-            arg_types = [t for _, t in resolve_arg_specs(arg_specs, type_defs)]
-        except RuntimeError as e:
-            print(str(e), file=sys.stderr)
-            sys.exit(1)
-
-    seq_args = None
-    if args.args is not None:
-        seq_args = bytes.fromhex(args.args)
-
-    model = FpySequencerModel()
-    error_code, trap = model.run(directives, arg_types=arg_types, args=seq_args)
-    if trap != DirectiveErrorCode.NO_ERROR:
-        print("Sequence trapped with " + str(trap))
-        exit(1)
-    if error_code != 0:
-        print("Sequence exited with error code " + str(error_code))
-        exit(error_code)
 
 
 def assemble_main(args: list[str] = None):
@@ -374,7 +345,11 @@ def assemble_main(args: list[str] = None):
     output = args.output
     if output is None:
         output = args.input.with_suffix(".bin")
-    output_bytes, crc = serialize_directives(directives)
+    try:
+        output_bytes, crc = serialize_directives(directives)
+    except fpy.error.BackendError as e:
+        print(e, file=sys.stderr)
+        sys.exit(1)
     output.write_bytes(output_bytes)
     print(f"{output}\nCRC {hex(crc)} size {human_readable_size(len(output_bytes))}")
 
@@ -494,14 +469,8 @@ def cmd_main(args: list[str] = None):
         required=True,
         help="The FPrime dictionary .json file",
     )
-    arg_parser.add_argument(
-        "-g",
-        "--ground-binary-dir",
-        type=Path,
-        required=False,
-        default=None,
-        help="Local directory to resolve .bin file paths for sequence calls",
-    )
+    _add_seq_map_argument(arg_parser)
+    _add_time_base_argument(arg_parser)
     arg_parser.add_argument(
         "--zmq-addr",
         type=str,
@@ -519,6 +488,12 @@ def cmd_main(args: list[str] = None):
         parsed_args = arg_parser.parse_args(args)
     else:
         parsed_args = arg_parser.parse_args()
+
+    try:
+        seq_maps = parse_seq_maps(parsed_args.seq_map)
+    except ValueError as e:
+        print(e, file=sys.stderr)
+        sys.exit(1)
 
     source = parsed_args.source
     if not source.endswith("\n"):
@@ -538,14 +513,11 @@ def cmd_main(args: list[str] = None):
         print(e, file=sys.stderr)
         sys.exit(1)
 
-    ground_binary_dir = parsed_args.ground_binary_dir
-    if ground_binary_dir is None:
-        ground_binary_dir = Path(".")
-
     try:
         state = get_base_compile_state(
             str(parsed_args.dictionary.resolve()),
-            str(ground_binary_dir.resolve()),
+            seq_maps,
+            default_time_base=parsed_args.time_base,
         )
     except fpy.error.DictionaryError as e:
         print(e, file=sys.stderr)
@@ -610,88 +582,3 @@ def cmd_main(args: list[str] = None):
         except Exception as e:
             print(f"Failed to send command: {e}", file=sys.stderr)
             sys.exit(1)
-
-
-def depend_main(args: list[str] = None):
-    arg_parser = argparse.ArgumentParser(
-        description=f"Fpy dependency tool {get_version_str()}"
-    )
-    arg_parser.add_argument(
-        "--version", action="version", version=f"%(prog)s {get_version_str()}"
-    )
-    arg_parser.add_argument("input", type=Path, help="The input .fpy file")
-    arg_parser.add_argument(
-        "-d",
-        "--dictionary",
-        type=Path,
-        required=True,
-        help="The FPrime dictionary .json file",
-    )
-    arg_parser.add_argument(
-        "-g",
-        "--ground-binary-dir",
-        type=Path,
-        required=False,
-        default=None,
-        help="Local directory to resolve .bin file paths for sequence calls (default: input file directory)",
-    )
-    arg_parser.add_argument(
-        "-i",
-        "--imports",
-        type=Path,
-        action="append",
-        default=[],
-        metavar="DIR",
-        dest="imports",
-        help="Directory to search when resolving absolute `import` statements (repeatable)",
-    )
-    if args is not None:
-        parsed_args = arg_parser.parse_args(args)
-    else:
-        parsed_args = arg_parser.parse_args()
-
-    if not parsed_args.input.exists():
-        print(f"Input file {parsed_args.input} does not exist", file=sys.stderr)
-        sys.exit(1)
-    fpy.error.file_name = str(parsed_args.input)
-
-    ground_binary_dir = parsed_args.ground_binary_dir
-    if ground_binary_dir is None:
-        ground_binary_dir = parsed_args.input.parent
-
-    import_directories = list(
-        dict.fromkeys(str(d.resolve()) for d in parsed_args.imports)
-    )
-
-    try:
-        state = get_base_compile_state(
-            str(parsed_args.dictionary.resolve()),
-            str(ground_binary_dir.resolve()),
-            import_directories=import_directories,
-            main_file_dir=str(parsed_args.input.parent.resolve()),
-            main_file_path=str(parsed_args.input.resolve()),
-        )
-    except fpy.error.DictionaryError as e:
-        print(e, file=sys.stderr)
-        sys.exit(1)
-
-    try:
-        body = text_to_ast(parsed_args.input.read_text(encoding="utf-8"))
-    except RecursionError:
-        print("Recursion limit exceeded in parsing", file=sys.stderr)
-        sys.exit(1)
-    except fpy.error.CompileError as e:
-        print(e, file=sys.stderr)
-        sys.exit(1)
-
-    try:
-        result = ast_to_dependencies(body, state)
-    except RecursionError:
-        print("Recursion limit exceeded in compiling", file=sys.stderr)
-        sys.exit(1)
-    except fpy.error.CompileError as e:
-        print(e, file=sys.stderr)
-        sys.exit(1)
-
-    for dep in result:
-        print(dep)

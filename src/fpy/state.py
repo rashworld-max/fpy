@@ -6,8 +6,7 @@ from dataclasses import dataclass, field
 import fpy.types
 from fpy.dictionary import json_default_to_fpy_value, load_dictionary
 from fpy.error import CompileError, CompileWarning, DictionaryError, WarningType
-from fpy.ir import Ir, IrLabel
-from fpy.macros import MACROS
+from fpy.macros import MACROS, TIME_MACRO
 from fpy.symbols import (
     CallableSymbol,
     CastSymbol,
@@ -37,6 +36,7 @@ from fpy.syntax import (
 )
 from fpy.types import (
     BLOCK_STATE,
+    OpCase,
     BOOL,
     CHECK_STATE,
     CMD_RESPONSE,
@@ -44,20 +44,31 @@ from fpy.types import (
     DEFAULT_FW_SERIALIZE_TRUE_VALUE,
     DEFAULT_MAX_DIRECTIVES_COUNT,
     DEFAULT_MAX_DIRECTIVE_SIZE,
+    DEFAULT_MAX_SEQ_ARG_COUNT,
+    DEFAULT_MAX_STACK_SIZE,
+    DEFAULT_TIME_BASE,
     FLAGS_TYPE,
     I64,
     LOG_SEVERITY,
     SEQ_ARGS,
+    PARAM_VALID,
     SPECIFIC_NUMERIC_TYPES,
     TIME,
     TIME_BASE,
     TIME_COMPARISON,
     TIME_INTERVAL,
+    TLM_VALID,
     FpyType,
     FpyValue,
     TypeKind,
 )
-from fpy.bytecode.directives import Directive, update_configurable_types_from_dict
+from fpy.bytecode.directives import update_configurable_types_from_dict
+
+
+class BackendState:
+    """Base for what a backend works out about a program while lowering it.
+    Each backend defines its own subclass and installs it on
+    CompileState.backend."""
 
 
 @dataclass
@@ -76,11 +87,20 @@ class CompileState:
 
     type_defs: dict = field(default_factory=dict)
     """Flat map of fully-qualified type name to FpyType, for resolving types at compile time."""
-    ground_binary_dir: str | None = None
-    """Local directory for resolving compiled sequence binaries (.bin files)."""
+    seq_maps: list[tuple[str, str]] = field(default_factory=list)
+    """Ordered (bin_prefix, fpy_prefix) pairs (--seq-map): how a sequence-run
+    command's onboard binary path is mapped to the target's .fpy source file."""
     # Sequence limits loaded from dictionary (or defaults if not specified)
     max_directives_count: int = DEFAULT_MAX_DIRECTIVES_COUNT
     max_directive_size: int = DEFAULT_MAX_DIRECTIVE_SIZE
+    max_seq_arg_count: int = DEFAULT_MAX_SEQ_ARG_COUNT
+    max_stack_size: int = DEFAULT_MAX_STACK_SIZE
+    # Command transport limits loaded from dictionary. None means the constant
+    # is not in the dictionary, in which case the corresponding check is skipped.
+    com_buffer_max_size: int | None = None
+    cmd_arg_buffer_max_size: int | None = None
+    cmd_names_by_opcode: dict[int, str] = field(default_factory=dict)
+    """Map of command opcode to fully-qualified command name, for error messages."""
 
     next_node_id: int = 0
     root_block: AstBlock = None
@@ -130,6 +150,9 @@ class CompileState:
     op_intermediate_types: dict[AstOp, FpyType] = field(default_factory=dict)
     """the intermediate type that all args should be converted to for the given op"""
 
+    op_cases: dict[AstOp, OpCase] = field(default_factory=dict)
+    """the case each op is evaluated by, given its intermediate type"""
+
     expr_explicit_casts: list[AstExpr] = field(default_factory=list)
     """a list of nodes which are explicit casts"""
     contextual_types: dict[AstExpr, FpyType] = field(default_factory=dict)
@@ -139,10 +162,14 @@ class CompileState:
     """expr to the fprime value it will end up being on the stack after type conversions.
     None if unsure at compile time.  NOTHING_VALUE for void expressions."""
 
+    type_ctors: dict[FpyType, TypeCtorSymbol] = field(default_factory=dict)
+    """each struct and array type -> its type constructor"""
+
     resolved_args: dict[Ast, list[AstExpr]] = field(default_factory=dict)
-    """Maps function calls, anon structs, and anon arrays to resolved arguments
-    in positional order. Default values are filled in for arguments not provided
-    at the call site (or struct members / array elements with defaults)."""
+    """Maps function calls (and, until DesugarAnonExprs turns them into type
+    constructor calls, anonymous structs and arrays) to resolved arguments in
+    positional order. Default values are filled in for arguments not provided
+    at the call site."""
 
     function_global_uses: dict[AstDef, list[VariableSymbol]] = field(
         default_factory=dict
@@ -154,26 +181,16 @@ class CompileState:
     function_callees: dict[AstDef, list[AstDef]] = field(default_factory=dict)
     """function definition -> the user function definitions it directly calls"""
 
-    while_loop_end_labels: dict[AstWhile, IrLabel] = field(default_factory=dict)
-    """while loop node mapped to the label pointing to the end of the loop"""
-    while_loop_start_labels: dict[AstWhile, IrLabel] = field(default_factory=dict)
-    """while loop node mapped to the label pointing to the start of the loop, just before the conditional"""
-    # store keys as while because for loops are desugared to while
-    for_loop_inc_labels: dict[AstWhile, IrLabel] = field(default_factory=dict)
-    """for loop node (desugared into a while) mapped to a label pointing to its increment stmt"""
+    used_funcs: set[AstDef] = field(default_factory=set)
+    """the function definitions with a call site anywhere in the program, i.e.
+    the ones a backend must generate code for (over-approximate: includes
+    functions called only from unused functions)"""
 
     does_return: dict[Ast, bool] = field(default_factory=dict)
 
-    used_funcs: set[AstDef] = field(default_factory=set)
-    """set of function definitions that are actually called and need code generated"""
-
-    func_entry_labels: dict[AstDef, IrLabel] = field(default_factory=dict)
-    """function to entry point label"""
-
-    generated_funcs: dict[AstDef, list[Directive | Ir]] = field(default_factory=dict)
-
-    frame_sizes: dict[Ast, int] = field(default_factory=dict)
-    """map of frame root node to the total size in bytes of all local variables in that frame"""
+    backend: BackendState | None = None
+    """the state of the backend lowering this program, or None if none is.
+    Written and read only by that backend."""
 
     flags_var: VariableSymbol = None
     """The built-in 'flags' variable ($Flags struct) that controls sequencer behavior."""
@@ -185,7 +202,9 @@ class CompileState:
     called_seq_arg_specs: dict[str, list[tuple[str, FpyType]]] = field(
         default_factory=dict
     )
-    """Map of .bin filename to resolved (arg_name, arg_type) pairs, populated by ResolveSequenceDependencies."""
+    """Map of a call's onboard binary path (its file_name literal) to the
+    target's resolved (arg_name, arg_type) pairs, populated by
+    ResolveSequenceDependencies."""
 
     errors: list[CompileError] = field(default_factory=list)
     """a list of all compile exceptions generated by passes"""
@@ -264,13 +283,18 @@ def _validate_and_replace_type(
     type_dict: dict[str, FpyType],
     name: str,
     canonical: FpyType,
+    required: bool = True,
 ) -> None:
-    """Validate that a required type exists in the dictionary and matches the
-    canonical definition, then replace it with the canonical version.
+    """Validate that a type in the dictionary matches the canonical
+    definition, then replace it with the canonical version.
 
-    Raises DictionaryError (with a user-facing explanation) if the dictionary is
-    missing the type or defines it incompatibly with the canonical version."""
+    Raises DictionaryError (with a user-facing explanation) if the dictionary
+    defines the type incompatibly with the canonical version, or omits it
+    while *required*. A non-required type absent from the dictionary is left
+    absent (the canonical definition stands unchecked)."""
     if name not in type_dict:
+        if not required:
+            return
         raise DictionaryError(name, "The dictionary does not define this type at all.")
     dict_type = type_dict[name]
     if dict_type.kind != canonical.kind:
@@ -517,10 +541,13 @@ def _make_type_ctor(name: str, typ: FpyType) -> TypeCtorSymbol | None:
 
 
 @lru_cache(maxsize=4)
-def _build_global_scopes(dictionary: str) -> tuple:
+def _build_global_scopes(
+    dictionary: str, default_time_base: str = DEFAULT_TIME_BASE
+) -> tuple:
     """
-    Build and cache the 3 global scopes and type_name_dict for a dictionary.
-    Returns tuple of (type_scope, callable_scope, values_scope, type_name_dict).
+    Build and cache the 3 global scopes, type_name_dict and type_ctors for a
+    (dictionary, default time base) pair. Returns tuple of (type_scope,
+    callable_scope, values_scope, type_name_dict, type_ctors).
     """
     d = load_dictionary(dictionary)
     cmd_name_dict = d["cmd_name_dict"]
@@ -534,12 +561,29 @@ def _build_global_scopes(dictionary: str) -> tuple:
 
     # Validate required dictionary types
     _update_time_base_from_dict(dict_type_name_dict)
+    if default_time_base not in TIME_BASE.enum_dict:
+        raise DictionaryError(
+            "TimeBase",
+            f"The default time base {default_time_base!r} is not one of its "
+            f"constants: {', '.join(TIME_BASE.enum_dict)}.",
+        )
     _update_time_context_type_from_dict(dict_type_name_dict)
     _validate_and_replace_type(dict_type_name_dict, "Fw.TimeValue", TIME)
     _validate_and_replace_type(
         dict_type_name_dict, "Fw.TimeIntervalValue", TIME_INTERVAL
     )
     _validate_and_replace_type(dict_type_name_dict, "Fw.CmdResponse", CMD_RESPONSE)
+    # The validity enums back the wasm backend's tlm/prm host reads. Most
+    # dictionaries never mention them (they are port argument types, not
+    # command or channel types), so they are optional -- but when a
+    # dictionary does define them, its values must match the canonical ones
+    # the compiled code bakes in.
+    _validate_and_replace_type(
+        dict_type_name_dict, "Fw.TlmValid", TLM_VALID, required=False
+    )
+    _validate_and_replace_type(
+        dict_type_name_dict, "Fw.ParamValid", PARAM_VALID, required=False
+    )
     _validate_and_replace_type(
         dict_type_name_dict, "Fw.TimeComparison", TIME_COMPARISON
     )
@@ -575,6 +619,11 @@ def _build_global_scopes(dictionary: str) -> tuple:
     for typ in type_name_dict.values():
         _populate_type_defaults(typ)
 
+    # The default time base supersedes the dictionary's timeBase default for
+    # the Fw.TimeValue ctor (struct literals coerce through the ctor, so they
+    # inherit it too).
+    TIME.member_defaults["timeBase"] = FpyValue(TIME_BASE, default_time_base)
+
     # Build callable dict: commands, numeric casts, type constructors, macros
     callable_name_dict: dict[str, CallableSymbol] = {}
 
@@ -601,10 +650,12 @@ def _build_global_scopes(dictionary: str) -> tuple:
             typ.name, typ, [("value", I64, None)], typ
         )
 
+    type_ctors: dict[FpyType, TypeCtorSymbol] = {}
     for name, typ in type_name_dict.items():
         ctor = _make_type_ctor(name, typ)
         if ctor is not None:
             callable_name_dict[name] = ctor
+            type_ctors[typ] = ctor
 
     for macro_name, macro in MACROS.items():
         callable_name_dict[macro_name] = macro
@@ -627,25 +678,32 @@ def _build_global_scopes(dictionary: str) -> tuple:
         ),
     )
 
-    return (type_scope, callable_scope, values_scope, type_name_dict)
+    return (type_scope, callable_scope, values_scope, type_name_dict, type_ctors)
 
 
 def get_base_compile_state(
     dictionary: str,
-    ground_binary_dir: str | None = None,
+    seq_maps: list[tuple[str, str]] | None = None,
     ignored_warnings: set[WarningType] | None = None,
     error_warnings: set[WarningType] | None = None,
     import_directories: list[str] | None = None,
     main_file_dir: str | None = None,
     main_file_path: str | None = None,
+    default_time_base: str | None = None,
 ) -> CompileState:
     """return the initial state of the compiler, based on the given dict path"""
-    type_scope, callable_scope, values_scope, type_defs = _build_global_scopes(
-        dictionary
+    if default_time_base is None:
+        default_time_base = DEFAULT_TIME_BASE
+    type_scope, callable_scope, values_scope, type_defs, type_ctors = (
+        _build_global_scopes(dictionary, default_time_base)
     )
+    # time() is a module-level symbol shared by every cached scope set, so its
+    # timeBase default is reapplied on every call: a _build_global_scopes cache
+    # hit must still reflect this compile's default time base.
+    TIME_MACRO.args[1] = ("timeBase", TIME_BASE, FpyValue(TIME_BASE, default_time_base))
     constants = load_dictionary(dictionary)["constants"]
 
-    def _const_int(key: str, default: int) -> int:
+    def _const_int(key: str, default: int | None) -> int | None:
         """Extract an integer constant value, falling back to *default*."""
         val = constants.get(key)
         if val is None:
@@ -681,13 +739,24 @@ def get_base_compile_state(
 
     state = CompileState(
         type_defs=type_defs,
-        ground_binary_dir=ground_binary_dir,
+        type_ctors=type_ctors,
+        seq_maps=list(seq_maps) if seq_maps else [],
         max_directives_count=_const_int(
             "Svc.Fpy.MAX_SEQUENCE_STATEMENT_COUNT", DEFAULT_MAX_DIRECTIVES_COUNT
         ),
         max_directive_size=_const_int(
             "Svc.Fpy.MAX_DIRECTIVE_SIZE", DEFAULT_MAX_DIRECTIVE_SIZE
         ),
+        max_seq_arg_count=_const_int(
+            "Svc.Fpy.MAX_SEQUENCE_ARG_COUNT", DEFAULT_MAX_SEQ_ARG_COUNT
+        ),
+        max_stack_size=_const_int("Svc.Fpy.MAX_STACK_SIZE", DEFAULT_MAX_STACK_SIZE),
+        com_buffer_max_size=_const_int("FW_COM_BUFFER_MAX_SIZE", None),
+        cmd_arg_buffer_max_size=_const_int("FW_CMD_ARG_BUFFER_MAX_SIZE", None),
+        cmd_names_by_opcode={
+            opcode: cmd.name
+            for opcode, cmd in load_dictionary(dictionary)["cmd_id_dict"].items()
+        },
         ignored_warnings=set(ignored_warnings) if ignored_warnings else set(),
         error_warnings=set(error_warnings) if error_warnings else set(),
         import_directories=list(import_directories) if import_directories else [],

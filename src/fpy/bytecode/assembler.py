@@ -10,9 +10,9 @@ from lark import Lark, Token, Transformer, v_args
 from lark.tree import Meta
 
 from fpy.bytecode.directives import Directive, StackOpDirective, StackSizeType
-from fpy.types import FpyType, FpyValue, INTERNAL_STRING
+from fpy.types import FpyValue, INTERNAL_STRING
 
-from fpy.error import CompileError
+from fpy.error import BackendError
 
 fpybc_grammar_str = (Path(__file__).parent / "grammar.lark").read_text(encoding="utf-8")
 
@@ -364,45 +364,6 @@ def _unpack_and_check_header(data: bytes) -> Header:
     return header
 
 
-def read_bin_arg_specs(path: Path) -> list[tuple[str, str, int]]:
-    """Read the arg specs section of a compiled .bin file.
-
-    This is used at compile time to discover the expected argument types of a
-    called sequence without deserializing the full directive body.
-    """
-    data = path.read_bytes()
-    header = _unpack_and_check_header(data)
-    _, arg_specs = _deserialize_arg_specs(data, HEADER_SIZE, header.argumentCount)
-    return arg_specs
-
-
-def resolve_arg_specs(
-    arg_specs: list[tuple[str, str, int]],
-    type_defs: dict[str, FpyType],
-) -> list[tuple[str, FpyType]]:
-    """Resolve (arg_name, type_name, size) arg_spec triples into (arg_name, FpyType) pairs.
-
-    Looks up each type name in PRIMITIVE_TYPE_MAP first, then in *type_defs*.
-    Raises RuntimeError if a type is not found or the size doesn't match.
-    """
-    from fpy.types import PRIMITIVE_TYPE_MAP
-
-    arg_types = []
-    for arg_name, type_name, size in arg_specs:
-        if type_name in PRIMITIVE_TYPE_MAP:
-            fpy_type = PRIMITIVE_TYPE_MAP[type_name]
-        elif type_name in type_defs:
-            fpy_type = type_defs[type_name]
-        else:
-            raise RuntimeError(f"Unknown type '{type_name}' (size {size})")
-        if fpy_type.max_size != size:
-            raise RuntimeError(
-                f"Type '{type_name}' size mismatch: binary says {size}, dictionary says {fpy_type.max_size}"
-            )
-        arg_types.append((arg_name, fpy_type))
-    return arg_types
-
-
 def serialize_directives(
     dirs: list[Directive],
     arg_specs: list[tuple[str, str, int]] | None = None,
@@ -420,12 +381,10 @@ def serialize_directives(
     for dir in dirs:
         dir_bytes = dir.serialize()
         if len(dir_bytes) > max_directive_size:
-            print(
-                CompileError(
-                    f"Directive {dir} in sequence too large (expected less than {max_directive_size}, was {len(dir_bytes)})"
-                )
+            raise BackendError(
+                f"Directive {dir.opcode.name} in sequence too large (expected at most {max_directive_size} bytes, was {len(dir_bytes)})",
+                dir.source_node,
             )
-            exit(1)
         body_bytes += dir_bytes
 
     arg_specs_bytes = _serialize_arg_specs(arg_specs)

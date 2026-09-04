@@ -11,7 +11,6 @@ from fpy.types import (
     TypeKind,
     FwSizeStoreType,
     U8,
-    U16,
     U32,
     U64,
     I8,
@@ -38,10 +37,13 @@ from fpy.syntax import (
 FwChanIdType = FpyType(TypeKind.U32, "U32")
 FwPrmIdType = FpyType(TypeKind.U32, "U32")
 FwOpcodeType = FpyType(TypeKind.U32, "U32")
+FwPacketDescriptorType = FpyType(TypeKind.U32, "U32")
 FwIndexType = FpyType(TypeKind.I16, "I16")
 
 # write_to_port's port param type; matched by name+kind, constants come from the dictionary at compile time.
-SerialPortIndex = FpyType(TypeKind.ENUM, "Svc.Fpy.SerialPortIndex", enum_dict={}, rep_type=U8)
+SerialPortIndex = FpyType(
+    TypeKind.ENUM, "Svc.Fpy.SerialPortIndex", enum_dict={}, rep_type=U8
+)
 
 
 ArrayIndexType = I64
@@ -49,8 +51,40 @@ StackSizeType = U32
 SignedStackSizeType = I32
 LoopVarType = I64  # same as ArrayIndexType
 # The type an exit/assert error code is coerced to (0 == success). Also the type
-# the LLVM/wasm entry point returns and that the fpy_exit host import takes.
+# the LLVM/wasm module's exit/fault host imports take.
 ErrorCodeType = I32
+
+# A function's stack frame starts with the return address and the previous
+# frame offset, each a StackSizeType.
+STACK_FRAME_HEADER_SIZE = StackSizeType.max_size * 2
+
+
+class DirectiveErrorCode(Enum):
+    """The error a directive can halt the sequencer with. Mirrors
+    Svc.Fpy.DirectiveErrorCode in the flight software, plus the codes the
+    LLVM/wasm backend extends it with (DESERIALIZE_ERROR_INVALID_BOOL)."""
+
+    NO_ERROR = 0
+    STMT_OUT_OF_BOUNDS = 1
+    TLM_GET_NOT_CONNECTED = 2
+    TLM_CHAN_NOT_FOUND = 3
+    PRM_GET_NOT_CONNECTED = 4
+    PRM_NOT_FOUND = 5
+    CMD_SERIALIZE_FAILURE = 6
+    EXIT_WITH_ERROR = 7
+    STACK_ACCESS_OUT_OF_BOUNDS = 8
+    STACK_OVERFLOW = 9
+    DOMAIN_ERROR = 10
+    ARRAY_OUT_OF_BOUNDS = 11
+    ARITHMETIC_OVERFLOW = 12
+    ARITHMETIC_UNDERFLOW = 13
+    FRAME_START_OUT_OF_BOUNDS = 14
+    STACK_UNDERFLOW = 15
+    INVALID_ARG = 16
+    CMD_FAIL = 17
+    SERIAL_PORT_NOT_CONNECTED = 18
+    SERIAL_PORT_INVALID_INDEX = 19
+    DESERIALIZE_ERROR_INVALID_BOOL = 20
 
 
 def _update_configurable_type(
@@ -74,9 +108,9 @@ def _update_configurable_enum(
     if name not in type_defs:
         return
     resolved = type_defs[name]
-    assert resolved.kind == TypeKind.ENUM, (
-        f"Configurable enum {name} must resolve to an ENUM, got {resolved}"
-    )
+    assert (
+        resolved.kind == TypeKind.ENUM
+    ), f"Configurable enum {name} must resolve to an ENUM, got {resolved}"
     target.kind = resolved.kind
     target.name = resolved.name
     target.enum_dict = resolved.enum_dict
@@ -90,6 +124,9 @@ def update_configurable_types_from_dict(type_defs: dict[str, FpyType]) -> None:
     _update_configurable_type(FwOpcodeType, type_defs, "FwOpcodeType")
     _update_configurable_type(FwIndexType, type_defs, "FwIndexType")
     _update_configurable_type(FwSizeStoreType, type_defs, "FwSizeStoreType")
+    _update_configurable_type(
+        FwPacketDescriptorType, type_defs, "FwPacketDescriptorType"
+    )
     _update_configurable_enum(SerialPortIndex, type_defs, "Svc.Fpy.SerialPortIndex")
 
 
@@ -212,10 +249,16 @@ class Directive:
     opcode: ClassVar[DirectiveId] = DirectiveId.INVALID
     _FIELD_TYPES: ClassVar[dict[str, FpyType]] = {}
 
+    # The AST node whose emission produced this directive, stamped by
+    # EmitterWithNodeInfo.emit so backend errors can point at a source line.
+    # Deliberately not an annotated dataclass field: it must not participate
+    # in serialization or equality.
+    source_node = None
+
     def serialize(self) -> bytes:
         arg_bytes = self.serialize_args()
         output = FpyValue(U8, self.opcode.value).serialize()
-        output += FpyValue(U16, len(arg_bytes)).serialize()
+        output += FpyValue(FwSizeStoreType, len(arg_bytes)).serialize()
         output += arg_bytes
         return output
 
@@ -249,11 +292,12 @@ class Directive:
 
     @classmethod
     def deserialize(cls, data: bytes, offset: int) -> tuple[int, Directive] | None:
-        if len(data) - offset < 3:
+        header_size = U8.max_size + FwSizeStoreType.max_size
+        if len(data) - offset < header_size:
             return None
         opcode = struct.unpack_from(">B", data, offset)[0]
-        arg_size = struct.unpack_from(">H", data, offset + 1)[0]
-        offset += 3
+        arg_size = FpyValue.deserialize(FwSizeStoreType, data, offset + 1)[0].val
+        offset += header_size
         if len(data) - offset < arg_size:
             return None
         args = data[offset : (offset + arg_size)]
@@ -306,6 +350,12 @@ class StackCmdDirective(Directive):
     opcode: ClassVar[DirectiveId] = DirectiveId.STACK_CMD
     args_size: int
     _FIELD_TYPES: ClassVar[dict[str, FpyType]] = {"args_size": StackSizeType}
+
+    # The opcode of the command this directive sends. The sequencer pops it
+    # from the stack at runtime, but codegen knows it and stamps it here so
+    # errors can name the command. Deliberately not an annotated dataclass
+    # field: it is not part of the serialized form.
+    cmd_opcode = None
 
 
 @dataclass
@@ -834,88 +884,3 @@ for cls in Directive.__subclasses__():
 for cls in StackOpDirective.__subclasses__():
     cls.__old_repr__ = cls.__repr__
     cls.__repr__ = StackOpDirective.__repr__
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Operator dispatch tables  (keys are FpyType singletons)
-# ─────────────────────────────────────────────────────────────────────────────
-
-UNARY_STACK_OPS: dict[str, dict[FpyType, type[StackOpDirective]]] = {
-    UnaryStackOp.NOT: {BOOL: NotDirective},
-    UnaryStackOp.IDENTITY: {
-        I64: NoOpDirective,
-        U64: NoOpDirective,
-        F64: NoOpDirective,
-    },
-    UnaryStackOp.NEGATE: {
-        I64: IntMultiplyDirective,
-        U64: IntMultiplyDirective,  # TODO disallow uint negation
-        F64: FloatMultiplyDirective,
-    },
-}
-
-BINARY_STACK_OPS: dict[str, dict[FpyType, type[StackOpDirective]]] = {
-    BinaryStackOp.EXPONENT: {F64: FloatExponentDirective},
-    BinaryStackOp.MODULUS: {
-        I64: SignedModuloDirective,
-        U64: UnsignedModuloDirective,
-        F64: FloatModuloDirective,
-    },
-    BinaryStackOp.ADD: {
-        I64: IntAddDirective,
-        U64: IntAddDirective,
-        F64: FloatAddDirective,
-    },
-    BinaryStackOp.SUBTRACT: {
-        I64: IntSubtractDirective,
-        U64: IntSubtractDirective,
-        F64: FloatSubtractDirective,
-    },
-    BinaryStackOp.MULTIPLY: {
-        I64: IntMultiplyDirective,
-        U64: IntMultiplyDirective,
-        F64: FloatMultiplyDirective,
-    },
-    BinaryStackOp.DIVIDE: {
-        I64: SignedIntDivideDirective,
-        U64: UnsignedIntDivideDirective,
-        F64: FloatDivideDirective,
-    },
-    BinaryStackOp.FLOOR_DIVIDE: {
-        I64: SignedIntDivideDirective,
-        U64: UnsignedIntDivideDirective,
-        # special case for float floor div
-    },
-    BinaryStackOp.GREATER_THAN: {
-        I64: SignedGreaterThanDirective,
-        U64: UnsignedGreaterThanDirective,
-        F64: FloatGreaterThanDirective,
-    },
-    BinaryStackOp.GREATER_THAN_OR_EQUAL: {
-        I64: SignedGreaterThanOrEqualDirective,
-        U64: UnsignedGreaterThanOrEqualDirective,
-        F64: FloatGreaterThanOrEqualDirective,
-    },
-    BinaryStackOp.LESS_THAN_OR_EQUAL: {
-        I64: SignedLessThanOrEqualDirective,
-        U64: UnsignedLessThanOrEqualDirective,
-        F64: FloatLessThanOrEqualDirective,
-    },
-    BinaryStackOp.LESS_THAN: {
-        I64: SignedLessThanDirective,
-        U64: UnsignedLessThanDirective,
-        F64: FloatLessThanDirective,
-    },
-    BinaryStackOp.EQUAL: {
-        I64: IntEqualDirective,
-        U64: IntEqualDirective,
-        F64: FloatEqualDirective,
-    },
-    BinaryStackOp.NOT_EQUAL: {
-        I64: IntNotEqualDirective,
-        U64: IntNotEqualDirective,
-        F64: FloatNotEqualDirective,
-    },
-    BinaryStackOp.OR: {BOOL: OrDirective},
-    BinaryStackOp.AND: {BOOL: AndDirective},
-}

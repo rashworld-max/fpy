@@ -1,4 +1,6 @@
-from fpy.model import DirectiveErrorCode
+import pytest
+
+from fpy.bytecode.directives import DirectiveErrorCode
 from fpy.test_helpers import (
     assert_compile_failure,
     assert_run_failure,
@@ -54,6 +56,7 @@ exit(1)
 """
         assert_run_success(fprime_test_api, seq)
 
+    @pytest.mark.fpybc_only("the directive-count limit is bytecode-specific")
     def test_too_many_dirs(self, fprime_test_api):
         from fpy.types import MAX_DIRECTIVES_COUNT
 
@@ -259,7 +262,7 @@ class TestAssertCmdSuccess:
         """Bare failing command with flag=True should exit with error."""
         seq = """
 flags.assert_cmd_success = True
-Ref.cmdSeq0.RUN("", Svc.BlockState.NO_BLOCK)
+Ref.cmdSeq0.RUN("", Svc.BlockState.BLOCK)
 """
         assert_run_failure(
             fprime_test_api,
@@ -271,7 +274,7 @@ Ref.cmdSeq0.RUN("", Svc.BlockState.NO_BLOCK)
         """Bare failing command with flag=False should not halt."""
         seq = """
 flags.assert_cmd_success = False
-Ref.cmdSeq0.RUN("", Svc.BlockState.NO_BLOCK)
+Ref.cmdSeq0.RUN("", Svc.BlockState.BLOCK)
 """
         assert_run_success(fprime_test_api, seq)
 
@@ -281,7 +284,7 @@ Ref.cmdSeq0.RUN("", Svc.BlockState.NO_BLOCK)
         """Captured failing command with flag=True should NOT auto-assert."""
         seq = """
 flags.assert_cmd_success = True
-resp: Fw.CmdResponse = Ref.cmdSeq0.RUN("test", Svc.BlockState.NO_BLOCK)
+resp: Fw.CmdResponse = Ref.cmdSeq0.RUN("test", Svc.BlockState.BLOCK)
 assert resp == Fw.CmdResponse.EXECUTION_ERROR
 """
         assert_run_success(fprime_test_api, seq)
@@ -290,7 +293,7 @@ assert resp == Fw.CmdResponse.EXECUTION_ERROR
         """Captured failing command with flag=False should not halt."""
         seq = """
 flags.assert_cmd_success = False
-resp: Fw.CmdResponse = Ref.cmdSeq0.RUN("test", Svc.BlockState.NO_BLOCK)
+resp: Fw.CmdResponse = Ref.cmdSeq0.RUN("test", Svc.BlockState.BLOCK)
 assert resp == Fw.CmdResponse.EXECUTION_ERROR
 """
         assert_run_success(fprime_test_api, seq)
@@ -320,7 +323,7 @@ CdhCore.cmdDisp.CMD_NO_OP()
         seq = """
 flags.assert_cmd_success = True
 flags.assert_cmd_success = False
-Ref.cmdSeq0.RUN("", Svc.BlockState.NO_BLOCK)
+Ref.cmdSeq0.RUN("", Svc.BlockState.BLOCK)
 """
         assert_run_success(fprime_test_api, seq)
 
@@ -331,7 +334,7 @@ Ref.cmdSeq0.RUN("", Svc.BlockState.NO_BLOCK)
         seq = """
 flags.assert_cmd_success = True
 if True:
-    Ref.cmdSeq0.RUN("", Svc.BlockState.NO_BLOCK)
+    Ref.cmdSeq0.RUN("", Svc.BlockState.BLOCK)
 """
         assert_run_failure(
             fprime_test_api,
@@ -345,7 +348,7 @@ if True:
 flags.assert_cmd_success = True
 x: bool = True
 while x:
-    Ref.cmdSeq0.RUN("", Svc.BlockState.NO_BLOCK)
+    Ref.cmdSeq0.RUN("", Svc.BlockState.BLOCK)
     x = False
 """
         assert_run_failure(
@@ -359,7 +362,7 @@ while x:
         seq = """
 flags.assert_cmd_success = True
 def do_cmd():
-    Ref.cmdSeq0.RUN("", Svc.BlockState.NO_BLOCK)
+    Ref.cmdSeq0.RUN("", Svc.BlockState.BLOCK)
 do_cmd()
 """
         assert_run_failure(
@@ -373,7 +376,7 @@ do_cmd()
         seq = """
 flags.assert_cmd_success = False
 def do_cmd():
-    Ref.cmdSeq0.RUN("", Svc.BlockState.NO_BLOCK)
+    Ref.cmdSeq0.RUN("", Svc.BlockState.BLOCK)
 do_cmd()
 """
         assert_run_success(fprime_test_api, seq)
@@ -383,7 +386,7 @@ do_cmd()
         seq = """
 flags.assert_cmd_success = True
 for i in 0 .. 1:
-    Ref.cmdSeq0.RUN("", Svc.BlockState.NO_BLOCK)
+    Ref.cmdSeq0.RUN("", Svc.BlockState.BLOCK)
 """
         assert_run_failure(
             fprime_test_api,
